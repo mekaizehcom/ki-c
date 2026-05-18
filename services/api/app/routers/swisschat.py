@@ -28,24 +28,13 @@ from app.deps import get_current_user, require_role
 from app.integrations import SWISSCHAT, forget, get_credentials, get_public, save_credentials
 from app.models import Approval, Conversation, SwisschatAccount, TotpSecret, User
 from app.queue import queue_depth, seen_once
-from app.routers.chat import generate_reply
+from app.routers.chat import generate_reply, _try_command
 from app.security import decrypt, verify_totp
 from app.workspace import load_workspace
 
 router = APIRouter(tags=["swisschat"])  # webhook has NO /api prefix (nginx /webhook/)
 api_router = APIRouter(prefix="/api", tags=["swisschat-api"])
 admin_router = APIRouter(prefix="/api/admin/swisschat", tags=["swisschat-admin"])
-
-HELP = (
-    "Tessa-Befehle:\n"
-    "/help – diese Hilfe\n"
-    "/status – Systemstatus\n"
-    "/agent <name> – Agent wechseln\n"
-    "/workspace <slug> – Workspace\n"
-    "/approve <id> | /deny <id> – Freigaben\n"
-    "/link – Verknüpfungscode anzeigen"
-)
-
 
 def _new_code() -> str:
     return f"{secrets.randbelow(900000) + 100000}"
@@ -71,46 +60,15 @@ def _conv_for(db: Session, user: User, sc_conv_id: str) -> Conversation:
 async def _handle_command(
     db: Session, user: User, conv: Conversation, text: str
 ) -> str | None:
-    parts = text.strip().split()
-    cmd = parts[0].lower()
-    arg = parts[1] if len(parts) > 1 else ""
-    if cmd == "/help":
-        return HELP
-    if cmd == "/status":
-        return (f"Tessa OK · Ingest-Queue: {queue_depth()} · "
-                f"Agent: {conv.agent_name} · Workspace: {settings.default_workspace}")
-    if cmd == "/link":
-        return "Dein Konto ist bereits verknüpft."
-    if cmd == "/agent":
-        ws = load_workspace(settings.default_workspace)
-        if arg in ws.agents:
-            conv.agent_name = arg
-            db.commit()
-            return f"Agent gewechselt zu: {arg}"
-        return f"Unbekannter Agent. Verfügbar: {', '.join(ws.agents)}"
-    if cmd == "/workspace":
-        return (f"Workspace bleibt '{settings.default_workspace}' "
-                "(Multi-Workspace folgt).")
-    if cmd in ("/approve", "/deny"):
-        try:
-            import uuid as _u
-
-            ap = db.get(Approval, _u.UUID(arg))
-        except Exception:
-            ap = None
-        if not ap:
-            return "Approval nicht gefunden."
-        totp = parts[2] if len(parts) > 2 else None
-        res = finalize_approval(db, ap, user, approve=(cmd == "/approve"),
-                                totp_code=totp)
-        if res.get("status") == "totp_required":
-            return ("TOTP-Bestätigung nötig: /approve <id> <totp-code>")
-        if "result" in res:
-            r = res["result"]
-            return (f"Approval {arg} → {res['status']} "
-                    f"(exit {r['exit_code']})\n{(r['stdout'] or r['stderr'])[:600]}")
-        return f"Approval {arg} → {res.get('status')} {res.get('detail','')}"
-    return None
+    """SwissChat command path — delegates to the unified _try_command in
+    chat.py so both channels share /help, /status, /models, /agent,
+    /approve, /deny, /link, /workspace. Falls back to the German
+    'Unbekannter Befehl' nudge for unknown slash inputs (in the web chat
+    these fall through to the model instead)."""
+    reply = _try_command(db, user, conv, settings.default_workspace, text)
+    if reply is not None:
+        return reply
+    return "Unbekannter Befehl. /help für die Liste."
 
 
 async def _process(raw_event: dict) -> None:

@@ -249,14 +249,19 @@ def _build_models_list(db: Session, conv: Conversation, ws_slug: str) -> str:
 
 
 HELP_TEXT = (
-    "**Available commands** (handled directly, no model call):\n"
-    "  `/help`                — this list\n"
-    "  `/status`              — system + conversation stats\n"
-    "  `/models`              — list available models for this chat\n"
-    "  `/models <name>`       — switch this conversation to a specific model\n"
-    "  `/models reset`        — revert to the agent's default model\n"
-    "  `/agent <name>`        — switch this conversation to a different agent\n"
-    "  `/agent reset`         — revert to `main`"
+    "Available commands (handled directly, no model call):\n"
+    "  /help                  — this list\n"
+    "  /status                — system + conversation stats\n"
+    "  /models                — list available models for this chat\n"
+    "  /models <name>         — switch this conversation to a specific model\n"
+    "  /models reset          — revert to the agent's default model\n"
+    "  /agent                 — show current + available agents\n"
+    "  /agent <name>          — switch this conversation to a different agent\n"
+    "  /agent reset           — revert to `main`\n"
+    "  /workspace             — show the current workspace\n"
+    "  /approve <id> [totp]   — approve a pending action (admins; TOTP for high/critical)\n"
+    "  /deny <id>             — deny a pending action\n"
+    "  /link                  — show your SwissChat link status"
 )
 
 
@@ -315,6 +320,56 @@ def _try_command(
               agent_id=new_name,
               details={"conversation": str(conv.id), "to": new_name})
         return f"Agent switched to **{new_name}**."
+
+    if cmd == "/workspace":
+        # Multi-workspace UI isn't here yet; just report the current one.
+        slugs = list_workspace_slugs()
+        return (f"Current workspace: **{ws_slug}**\n"
+                f"Available: {', '.join(slugs)}\n"
+                f"(Switching workspaces from chat is not yet implemented.)")
+
+    if cmd in ("/approve", "/deny"):
+        from app.approvals import finalize_approval
+        from app.models import Approval
+
+        try:
+            ap_id = uuid.UUID(arg)
+        except Exception:
+            return ("Usage: `/approve <approval_id> [totp]`  or  "
+                    "`/deny <approval_id>`")
+        ap = db.get(Approval, ap_id)
+        if not ap:
+            return f"Approval `{arg}` not found."
+        totp = parts[2] if len(parts) > 2 else None
+        res = finalize_approval(db, ap, user, approve=(cmd == "/approve"),
+                                totp_code=totp)
+        if res.get("status") == "totp_required":
+            return ("TOTP required. Try: `/approve "
+                    f"{arg} <6-digit code>`")
+        if "result" in res:
+            r = res["result"]
+            tail = (r.get("stdout") or r.get("stderr") or "")[:600]
+            return (f"Approval `{arg}` → **{res['status']}** "
+                    f"(exit {r.get('exit_code')})\n{tail}")
+        return (f"Approval `{arg}` → **{res.get('status')}** "
+                f"{res.get('detail','')}").strip()
+
+    if cmd == "/link":
+        from app.models import SwisschatAccount
+
+        rows = list(db.scalars(
+            select(SwisschatAccount).where(SwisschatAccount.user_id == user.id)
+        ))
+        if not rows:
+            return ("No SwissChat accounts linked to your Tessa user yet. "
+                    "Open https://tessa.ki-c.pro/settings to link one.")
+        linked = [r for r in rows if r.linked]
+        if linked:
+            ids = ", ".join(r.swisschat_user_id[:8] + "…" for r in linked)
+            return f"Linked SwissChat account(s): {ids}"
+        codes = ", ".join(r.link_code for r in rows if r.link_code)
+        return ("Pending link. Enter this code (plus your TOTP) on "
+                f"https://tessa.ki-c.pro/settings : {codes}")
 
     return None  # unknown slash command -> let the model see it
 
