@@ -12,6 +12,10 @@
   let audit: any[] = [];
   let keyInput: Record<string, string> = {};
   let msg = "";
+  let swisschat: any = null;
+  let pairCode = "";
+  let pairBot = "tessa";
+  let pairBusy = false;
 
   onMount(async () => {
     try {
@@ -29,10 +33,39 @@
   });
 
   async function refresh() {
-    [sys, providers, agents, users, audit] = await Promise.all([
+    [sys, providers, agents, users, audit, swisschat] = await Promise.all([
       api.adminSystem(), api.adminProviders(), api.adminAgents(),
       api.adminUsers(), api.adminAudit(),
+      api.swisschatStatus().catch(() => ({ configured: false })),
     ]);
+  }
+
+  async function pairSwisschat() {
+    msg = "";
+    if (!pairCode.trim()) return;
+    pairBusy = true;
+    try {
+      const r = await api.swisschatPair(pairCode.trim(), pairBot.trim() || "tessa");
+      msg = `SwissChat paired as ${r.bot_username}. Webhook: ${r.webhook_url}`;
+      pairCode = "";
+      await refresh();
+    } catch (e: any) {
+      msg = `Pairing failed: ${e.message}`;
+    } finally {
+      pairBusy = false;
+    }
+  }
+
+  async function forgetSwisschat() {
+    if (!confirm("Forget SwissChat credentials? The bot will stop working until re-paired.")) return;
+    msg = "";
+    try {
+      await api.swisschatForget();
+      msg = "SwissChat credentials forgotten.";
+      await refresh();
+    } catch (e: any) {
+      msg = e.message;
+    }
   }
 
   async function saveProvider(p: any) {
@@ -121,6 +154,38 @@
       <p class="muted" style="font-size:0.78rem;">
         Keys are stored Fernet-encrypted and passed to the gateway per request.
       </p>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem;">
+      <h3 style="margin-top:0;">SwissChat</h3>
+      {#if swisschat?.configured}
+        <div class="muted" style="font-size:0.85rem;margin-bottom:0.6rem;">
+          Paired as <b>{swisschat.bot_username}</b> ·
+          webhook: <code>{swisschat.webhook_url}</code> ·
+          enabled: {swisschat.enabled ? "yes" : "no"}
+        </div>
+        <button on:click={forgetSwisschat} style="background:#b91c1c;">
+          Forget credentials
+        </button>
+      {:else}
+        <p class="muted" style="font-size:0.85rem;margin-top:0;">
+          In SwissChat → Settings → Bots → "New bot", copy the pairing code
+          (format <code>xxx-xxxx-xxxx-xxxx</code>) and paste it here.
+          The code is single-use and expires after 24 h.
+          (Superadmin only.)
+        </p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+          <input bind:value={pairCode}
+                 placeholder="kai-xxxx-xxxx-xxxx"
+                 style="flex:1;min-width:240px;font-family:ui-monospace,monospace;" />
+          <input bind:value={pairBot} placeholder="bot username"
+                 style="width:150px;" />
+          <button on:click={pairSwisschat}
+                  disabled={pairBusy || !pairCode.trim()}>
+            {pairBusy ? "Pairing…" : "Pair"}
+          </button>
+        </div>
+      {/if}
     </div>
 
     <div class="card" style="margin-bottom:1rem;">

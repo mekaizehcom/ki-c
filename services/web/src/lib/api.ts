@@ -69,6 +69,14 @@ export const api = {
     }),
   deny: (id: string) =>
     request<any>(`/approvals/${id}/deny`, { method: "POST" }),
+  swisschatStatus: () => request<any>("/admin/swisschat"),
+  swisschatPair: (pairing_code: string, bot_username = "tessa") =>
+    request<any>("/admin/swisschat/pair", {
+      method: "POST",
+      body: JSON.stringify({ pairing_code, bot_username }),
+    }),
+  swisschatForget: () =>
+    request<any>("/admin/swisschat", { method: "DELETE" }),
   swisschatMe: () => request<any[]>("/swisschat/me"),
   swisschatLink: (code: string, totp_code: string) =>
     request<any>("/swisschat/link", {
