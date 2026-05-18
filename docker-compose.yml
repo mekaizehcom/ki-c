@@ -12,6 +12,7 @@ services:
       TESSA_WORKSPACES_DIR: /workspaces
     volumes:
       - ./workspaces:/workspaces:ro
+      - uploads:/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,6 +46,7 @@ services:
     env_file: [.env]
     volumes:
       - ./workspaces:/workspaces:ro
+      - uploads:/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,6 +115,7 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  uploads:
 
 networks:
   tessa-internal:

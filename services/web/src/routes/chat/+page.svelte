@@ -3,7 +3,7 @@
   import { goto } from "$app/navigation";
   import { api, chatSocket } from "$lib/api";
 
-  type Msg = { role: string; content: string; model?: string };
+  type Msg = { role: string; content: string; model?: string; sources?: any[] };
 
   let user: any = null;
   let loading = true;
@@ -16,6 +16,9 @@
   let sending = false;
   let ws: WebSocket | null = null;
   let streaming = "";
+  let pendingSources: any[] = [];
+  let documents: any[] = [];
+  let uploading = false;
 
   onMount(async () => {
     try {
@@ -26,6 +29,7 @@
     }
     agents = await api.agents();
     conversations = await api.conversations();
+    await refreshDocuments();
     loading = false;
     connect();
   });
@@ -38,11 +42,16 @@
       const m = JSON.parse(ev.data);
       if (m.type === "meta") {
         conversationId = m.conversation_id;
+        pendingSources = m.sources || [];
       } else if (m.type === "delta") {
         streaming += m.text;
       } else if (m.type === "done") {
-        messages = [...messages, { role: "assistant", content: streaming, model: m.model }];
+        messages = [
+          ...messages,
+          { role: "assistant", content: streaming, model: m.model, sources: pendingSources },
+        ];
         streaming = "";
+        pendingSources = [];
         sending = false;
         refreshConversations();
       } else if (m.type === "error") {
@@ -60,6 +69,26 @@
     try {
       conversations = await api.conversations();
     } catch {}
+  }
+
+  async function refreshDocuments() {
+    try {
+      documents = await api.listDocuments();
+    } catch {}
+  }
+
+  async function onUpload(e: Event) {
+    const inp = e.target as HTMLInputElement;
+    if (!inp.files || !inp.files[0]) return;
+    uploading = true;
+    try {
+      await api.uploadDocument(inp.files[0], "workspace");
+    } catch (err: any) {
+      alert(err.message);
+    }
+    inp.value = "";
+    uploading = false;
+    setTimeout(refreshDocuments, 1500);
   }
 
   function send() {
@@ -134,6 +163,22 @@
           </div>
         {/each}
       </div>
+      <div>
+        <span class="label">Knowledge base</span>
+        <label style="display:block;font-size:0.8rem;cursor:pointer;padding:0.4rem 0;color:var(--accent);">
+          {uploading ? "Uploading…" : "+ Upload document"}
+          <input type="file" on:change={onUpload} disabled={uploading}
+                 accept=".md,.txt,.pdf,.docx,.html,.csv,.json,.log"
+                 style="display:none;" />
+        </label>
+        <div style="max-height:120px;overflow:auto;">
+          {#each documents as d}
+            <div class="muted" style="font-size:0.72rem;padding:0.15rem 0;">
+              {d.filename} · {d.status}
+            </div>
+          {/each}
+        </div>
+      </div>
       <button on:click={logout} style="background:#30363d;">Logout</button>
     </aside>
 
@@ -148,6 +193,11 @@
               {m.role}{m.model ? " · " + m.model : ""}
             </div>
             <div style="white-space:pre-wrap;">{m.content}</div>
+            {#if m.sources && m.sources.length}
+              <div class="muted" style="font-size:0.72rem;margin-top:0.3rem;">
+                Quellen: {#each m.sources as s}[{s.n}] {s.filename} ({s.score}) {/each}
+              </div>
+            {/if}
           </div>
         {/each}
         {#if streaming}

@@ -12,6 +12,7 @@ services:
       - ./services/api/app:/srv/app
       - ./services/api/migrations:/srv/migrations
       - ./workspaces:/workspaces:ro
+      - uploads:/data/uploads
     ports:
       - "8000:8000"
 
@@ -33,3 +34,7 @@ services:
     command: ["python", "-m", "worker.main"]
     volumes:
       - ./services/worker/worker:/srv/worker
+      - uploads:/data/uploads
+
+volumes:
+  uploads:

@@ -12,6 +12,7 @@ from app.deps import SESSION_COOKIE, get_current_user
 from app.llm import chat_completion, chat_stream, resolve_models
 from app.models import Conversation, Message, SessionToken, User
 from app.security import hash_token
+from app.vectors import collection_for, embed_query, search
 from app.workspace import load_workspace
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -63,6 +64,31 @@ def _get_or_create_conv(
     db.add(conv)
     db.commit()
     return conv
+
+
+def _retrieval(user: User, ws_slug: str, query: str) -> tuple[str, list[dict]]:
+    """Vector-retrieved context block + cited sources (§22)."""
+    try:
+        hits = search(
+            collection_for(ws_slug),
+            embed_query(query),
+            role=user.role,
+            user_id=str(user.id),
+            workspace_id=None,
+            top_k=5,
+        )
+    except Exception:
+        hits = []
+    if not hits:
+        return "", []
+    lines = ["# Kontext aus der Wissensbasis (zitiere Quellen):"]
+    for i, h in enumerate(hits, 1):
+        lines.append(f"[{i}] {h['filename']}#{h.get('seq')}: {h['text'][:600]}")
+    return "\n".join(lines), [
+        {"n": i, "filename": h["filename"], "document_id": h["document_id"],
+         "score": round(h["score"], 4)}
+        for i, h in enumerate(hits, 1)
+    ]
 
 
 def _history(db: Session, conv: Conversation) -> list[dict]:
@@ -155,22 +181,28 @@ async def chat(
     db.commit()
 
     messages = [{"role": "system", "content": _system_prompt(ws_slug, agent_name)}]
+    ctx, sources = _retrieval(user, ws_slug, body.message)
+    if ctx:
+        messages.append({"role": "system", "content": ctx})
     messages += _history(db, conv)
 
     model = _model_for(ws_slug, agent_name, db)
     reply, used = await chat_completion(model, messages)
 
-    db.add(Message(conversation_id=conv.id, role="assistant", content=reply, model=used))
+    db.add(Message(conversation_id=conv.id, role="assistant", content=reply,
+                   model=used, meta={"sources": sources}))
     conv.updated_at = conv.updated_at  # touch via onupdate
     db.commit()
     audit(db, action="chat.message", user_id=user.id, agent_id=agent_name,
-          details={"model": used, "conversation": str(conv.id)})
+          details={"model": used, "conversation": str(conv.id),
+                   "sources": len(sources)})
 
     return {
         "conversation_id": str(conv.id),
         "reply": reply,
         "model": used,
         "agent": agent_name,
+        "sources": sources,
     }
 
 
@@ -208,19 +240,24 @@ async def ws_chat(ws: WebSocket) -> None:
                 db.commit()
                 messages = [{"role": "system",
                              "content": _system_prompt(ws_slug, agent_name)}]
+                ctx, sources = _retrieval(user, ws_slug, body.message)
+                if ctx:
+                    messages.append({"role": "system", "content": ctx})
                 messages += _history(db, conv)
                 model = _model_for(ws_slug, agent_name, db)
 
                 await ws.send_json({"type": "meta",
                                     "conversation_id": str(conv.id),
-                                    "agent": agent_name})
+                                    "agent": agent_name,
+                                    "sources": sources})
                 full, used = "", model
                 async for delta, m in chat_stream(model, messages):
                     full += delta
                     used = m
                     await ws.send_json({"type": "delta", "text": delta})
                 db.add(Message(conversation_id=conv.id, role="assistant",
-                               content=full, model=used))
+                               content=full, model=used,
+                               meta={"sources": sources}))
                 db.commit()
                 audit(db, action="chat.message", user_id=user.id,
                       agent_id=agent_name,

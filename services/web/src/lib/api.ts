@@ -38,6 +38,20 @@ export const api = {
     conversation_id?: string | null;
     agent?: string;
   }) => request<any>("/chat", { method: "POST", body: JSON.stringify(body) }),
+  listDocuments: () => request<any[]>("/documents"),
+  uploadDocument: async (file: File, visibility = "workspace") => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("visibility", visibility);
+    const res = await fetch("/api/documents/upload", {
+      method: "POST",
+      body: fd,
+      credentials: "include",
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((body && body.detail) || `Upload failed (${res.status})`);
+    return body;
+  },
 };
 
 export function chatSocket(): WebSocket {
