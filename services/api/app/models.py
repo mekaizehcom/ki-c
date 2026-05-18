@@ -147,6 +147,7 @@ class Conversation(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(200), default="New conversation")
     status: Mapped[str] = mapped_column(String(20), default="active")
     external_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    model_override: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
 class Message(Base):

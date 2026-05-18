@@ -46,6 +46,20 @@ _ENV_KEY = {
     "deepseek": settings.deepseek_api_key,
 }
 
+# Rough context windows per model name — used by /status to show usage %.
+# Conservative numbers; missing entries display as "unknown".
+CONTEXT_WINDOWS = {
+    "gpt-4.1": 1_000_000,
+    "gpt-4o-mini": 128_000,
+    "claude-sonnet": 1_000_000,
+    "claude-haiku": 200_000,
+    "deepseek-chat": 64_000,
+    "deepseek-reasoner": 64_000,
+    "local-qwen": 32_000,
+    "local-llama": 32_000,
+    "mock-echo": 8_000,
+}
+
 
 def _provider_available(db: Session | None, provider: str) -> bool:
     if _ENV_KEY.get(provider):
@@ -55,6 +69,34 @@ def _provider_available(db: Session | None, provider: str) -> bool:
         if row and row.enabled and row.api_key_encrypted:
             return True
     return False
+
+
+def list_available_models(db: Session | None) -> list[dict]:
+    """Models the user can actually pick right now.
+
+    Includes mock-echo (always) and any cloud model whose provider key
+    is configured (DB > env). Local-node models are listed if the
+    matching MODEL_NODE_*_URL env var is set.
+    """
+    out: list[dict] = []
+    seen = set()
+    for tok, name in TOKEN_MAP.items():
+        if name in seen:
+            continue
+        provider = PROVIDER_OF.get(name, "")
+        if _provider_available(db, provider):
+            out.append({"name": name, "provider": provider, "available": True})
+            seen.add(name)
+    # local nodes — available iff the corresponding URL env is set
+    if settings.tessa_env or True:  # always show structure
+        for nm, env_key in (("local-qwen", "MODEL_NODE_1_URL"),
+                            ("local-llama", "MODEL_NODE_1_URL")):
+            import os
+            if os.environ.get(env_key):
+                out.append({"name": nm, "provider": "local", "available": True})
+                seen.add(nm)
+    out.append({"name": MOCK_MODEL, "provider": "mock", "available": True})
+    return out
 
 
 def provider_credentials(db: Session | None, model: str) -> dict:

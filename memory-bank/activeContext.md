@@ -21,7 +21,24 @@ Die noch laufende Aufgabe für den Endnutzer ist die **User-Verlinkung**:
 
 ## Letzte Entscheidungen (jüngste zuerst)
 
-1. **Agent kann seine eigenen Steering-Dateien selbst editieren.** Die
+1. **Deterministische Slash-Commands im Chat** (Migration 0003).
+   `_try_command()` läuft VOR jedem Modell-Aufruf in REST und WS:
+   - `/help` — Liste aller Commands.
+   - `/models` — verfügbare Modelle (gefiltert nach konfigurierten
+     Providern, inkl. local-* wenn `MODEL_NODE_*_URL` gesetzt, plus
+     `mock-echo`).
+   - `/models <name>` — schreibt `conversations.model_override`.
+     Wirkt sofort, persistent für die Conversation. `/models reset`
+     löscht den Override.
+   - `/agent <name>` / `/agent reset` — Agent-Switch in laufendem Chat.
+   - `/status` — Host (Uptime, RAM, Disk), Tessa (queue depth,
+     worker heartbeat, counts), aktuelle Conversation (Agent, Modell,
+     Messages, geschätzte Token-Auslastung des Context-Windows),
+     Provider-Status.
+   - Unbekannte Slashes (z. B. `/path/to/file`) fallen weiter durch
+     ans Modell — das ist Absicht, damit Code-Konversationen nicht
+     gekapert werden.
+2. **Agent kann seine eigenen Steering-Dateien selbst editieren.** Die
    `workspaces/`-Mount ist jetzt RW, zwei neue *internal* Tools
    (`workspace_read` / `workspace_write`) laufen in-process durch
    dieselbe Permission/Audit-Pipeline wie die argv-Tools. Chat-Path

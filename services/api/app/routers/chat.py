@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -11,9 +11,12 @@ from app.config import settings
 from app.db import SessionLocal, get_db
 from app.deps import SESSION_COOKIE, get_current_user
 from app.llm import (
+    CONTEXT_WINDOWS,
+    MOCK_MODEL,
     chat_completion,
     chat_completion_full,
     chat_stream,
+    list_available_models,
     provider_credentials,
     resolve_models,
 )
@@ -47,9 +50,13 @@ def _system_prompt(ws_slug: str, agent_name: str) -> str:
     return "\n".join(p for p in parts if p).strip()
 
 
-def _model_for(ws_slug: str, agent_name: str, db: Session) -> str:
+def _model_for(conv: Conversation, ws_slug: str, db: Session) -> str:
+    """Model selection: per-conversation override wins; otherwise the
+    agent's MODELS.md/ROUTING.md-derived first-available choice."""
+    if conv.model_override:
+        return conv.model_override
     ws = load_workspace(ws_slug)
-    agent = ws.agents.get(agent_name)
+    agent = ws.agents.get(conv.agent_name)
     profile_name = agent.model_profile if agent else "default-balanced"
     prof = ws.model_profiles.get(profile_name)
     providers = prof.providers if prof else []
@@ -100,6 +107,225 @@ def _retrieval(user: User, ws_slug: str, query: str) -> tuple[str, list[dict]]:
          "score": round(h["score"], 4)}
         for i, h in enumerate(hits, 1)
     ]
+
+
+def _approx_tokens(messages: list[dict]) -> int:
+    """Very rough char/4 heuristic. Good enough for /status."""
+    total = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c)
+    return total // 4
+
+
+def _fmt_bytes(n: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    f = float(n)
+    for u in units:
+        if f < 1024 or u == units[-1]:
+            return f"{f:,.1f} {u}"
+        f /= 1024
+    return f"{n} B"
+
+
+def _fmt_duration(seconds: float) -> str:
+    s = int(seconds)
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m, _ = divmod(s, 60)
+    parts = []
+    if d:
+        parts.append(f"{d}d")
+    if h or d:
+        parts.append(f"{h}h")
+    parts.append(f"{m}m")
+    return " ".join(parts)
+
+
+def _build_status(db: Session, user: User, conv: Conversation, ws_slug: str) -> str:
+    """Static, deterministic system report. No LLM."""
+    import os
+    import shutil
+    import time
+
+    from app.models import Document as _Doc
+    from app.models import ModelProvider as _MP
+    from app.models import User as _U
+    from app.queue import _pool, queue_depth
+
+    # Host
+    try:
+        with open("/proc/uptime") as fh:
+            up = _fmt_duration(float(fh.read().split()[0]))
+    except Exception:
+        up = "?"
+    meminfo: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, _, rest = line.partition(":")
+                meminfo[k.strip()] = int(rest.strip().split()[0]) * 1024
+    except Exception:
+        pass
+    ram_total = meminfo.get("MemTotal", 0)
+    ram_avail = meminfo.get("MemAvailable", 0)
+    ram_used = max(0, ram_total - ram_avail)
+    du = shutil.disk_usage("/")
+
+    # Tessa
+    try:
+        hb = _pool.get("tessa:worker:heartbeat")
+        worker = (f"alive ({int(time.time() - int(hb))}s ago)"
+                  if hb and time.time() - int(hb) < 300 else "stale")
+    except Exception:
+        worker = "?"
+    n_users = db.scalar(select(func.count()).select_from(_U)) or 0
+    n_docs = db.scalar(select(func.count()).select_from(_Doc)) or 0
+    n_convs = db.scalar(
+        select(func.count())
+        .select_from(Conversation)
+        .where(Conversation.user_id == user.id)
+    ) or 0
+
+    # Conversation
+    history = _history(db, conv)
+    used_tokens = _approx_tokens(history)
+    current_model = _model_for(conv, ws_slug, db)
+    cw = CONTEXT_WINDOWS.get(current_model)
+    if cw:
+        pct = min(100.0, 100 * used_tokens / cw)
+        ctx_line = f"{used_tokens:,} / {cw:,} tokens (~{pct:.1f}%)"
+    else:
+        ctx_line = f"{used_tokens:,} tokens (context window unknown)"
+
+    # Providers
+    prov_lines = []
+    for p in ("openai", "anthropic", "deepseek"):
+        row = db.get(_MP, p)
+        on = bool(row and row.enabled and row.api_key_encrypted)
+        prov_lines.append(f"  {p:10s} {'✓ enabled' if on else '– disabled'}")
+
+    lines = [
+        "**System**",
+        f"  Uptime:    {up}",
+        (f"  RAM:       {_fmt_bytes(ram_used)} / {_fmt_bytes(ram_total)} "
+         f"used ({(100*ram_used/ram_total):.0f}%)") if ram_total else "  RAM: ?",
+        (f"  Disk:      {_fmt_bytes(du.used)} / {_fmt_bytes(du.total)} "
+         f"used ({(100*du.used/du.total):.0f}%)"),
+        "",
+        "**Tessa**",
+        f"  Users:           {n_users}",
+        f"  Your convs:      {n_convs}",
+        f"  Documents:       {n_docs}",
+        f"  Ingest queue:    {queue_depth()}",
+        f"  Worker:          {worker}",
+        f"  Workspace:       {ws_slug}",
+        "",
+        "**This conversation**",
+        f"  Agent:           {conv.agent_name}",
+        f"  Model:           {current_model}"
+        + (f"  (override)" if conv.model_override else ""),
+        f"  Messages:        {len(history)}",
+        f"  Context (~):     {ctx_line}",
+        "",
+        "**Providers**",
+        *prov_lines,
+    ]
+    return "\n".join(lines)
+
+
+def _build_models_list(db: Session, conv: Conversation, ws_slug: str) -> str:
+    available = list_available_models(db)
+    current = _model_for(conv, ws_slug, db)
+    lines = ["Available models (✓ = current):"]
+    for m in available:
+        mark = "✓" if m["name"] == current else " "
+        lines.append(f"  {mark} {m['name']:<20s} ({m['provider']})")
+    lines.append("")
+    lines.append("Switch:  `/models <name>`     e.g. `/models claude-sonnet`")
+    lines.append("Reset:   `/models reset`      (use the agent's default)")
+    return "\n".join(lines)
+
+
+HELP_TEXT = (
+    "**Available commands** (handled directly, no model call):\n"
+    "  `/help`                — this list\n"
+    "  `/status`              — system + conversation stats\n"
+    "  `/models`              — list available models for this chat\n"
+    "  `/models <name>`       — switch this conversation to a specific model\n"
+    "  `/models reset`        — revert to the agent's default model\n"
+    "  `/agent <name>`        — switch this conversation to a different agent\n"
+    "  `/agent reset`         — revert to `main`"
+)
+
+
+def _try_command(
+    db: Session, user: User, conv: Conversation, ws_slug: str, text: str
+) -> str | None:
+    """If `text` is a slash command, handle it and return a reply string.
+    Returns None if it's not a command — caller proceeds to the LLM."""
+    if not text or not text.startswith("/"):
+        return None
+    parts = text.strip().split()
+    cmd = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else ""
+
+    if cmd == "/help":
+        return HELP_TEXT
+
+    if cmd == "/status":
+        return _build_status(db, user, conv, ws_slug)
+
+    if cmd == "/models":
+        if not arg:
+            return _build_models_list(db, conv, ws_slug)
+        if arg.lower() == "reset":
+            conv.model_override = None
+            db.commit()
+            audit(db, action="chat.model_reset", user_id=user.id,
+                  agent_id=conv.agent_name,
+                  details={"conversation": str(conv.id)})
+            return ("Model override cleared — this conversation will use "
+                    f"the agent's default ({_model_for(conv, ws_slug, db)}).")
+        chosen = arg
+        available = {m["name"]: m for m in list_available_models(db)}
+        if chosen not in available:
+            return (f"Unknown or unavailable model: `{chosen}`.\n\n"
+                    + _build_models_list(db, conv, ws_slug))
+        conv.model_override = chosen
+        db.commit()
+        audit(db, action="chat.model_override", user_id=user.id,
+              agent_id=conv.agent_name,
+              details={"conversation": str(conv.id), "model": chosen})
+        return f"Model for this conversation set to **{chosen}**."
+
+    if cmd == "/agent":
+        ws = load_workspace(ws_slug)
+        if not arg:
+            names = ", ".join(ws.agents)
+            return f"Current agent: **{conv.agent_name}**. Available: {names}"
+        new_name = "main" if arg.lower() == "reset" else arg
+        if new_name not in ws.agents:
+            return (f"Unknown agent: `{new_name}`. Available: "
+                    + ", ".join(ws.agents))
+        conv.agent_name = new_name
+        db.commit()
+        audit(db, action="chat.agent_switched", user_id=user.id,
+              agent_id=new_name,
+              details={"conversation": str(conv.id), "to": new_name})
+        return f"Agent switched to **{new_name}**."
+
+    return None  # unknown slash command -> let the model see it
+
+
+def _save_system_reply(
+    db: Session, conv: Conversation, prompt: str, reply: str
+) -> None:
+    db.add(Message(conversation_id=conv.id, role="user", content=prompt))
+    db.add(Message(conversation_id=conv.id, role="assistant", content=reply,
+                   model="system"))
+    db.commit()
 
 
 def _history(db: Session, conv: Conversation) -> list[dict]:
@@ -217,6 +443,17 @@ async def generate_reply(
     """Shared turn: store user msg, retrieve, call model (with optional
     tool-use loop), persist, audit. Used by REST chat and SwissChat.
     WS path is text-only and bypasses tool-use today."""
+    # Slash commands short-circuit the LLM call.
+    cmd_reply = _try_command(db, user, conv, ws_slug, message)
+    if cmd_reply is not None:
+        _save_system_reply(db, conv, message, cmd_reply)
+        audit(db, action="chat.command", user_id=user.id,
+              agent_id=conv.agent_name,
+              details={"conversation": str(conv.id),
+                       "command": message.split()[0],
+                       "channel": conv.channel})
+        return cmd_reply, "system", []
+
     agent_name = conv.agent_name
     db.add(Message(conversation_id=conv.id, role="user", content=message))
     db.commit()
@@ -227,7 +464,7 @@ async def generate_reply(
         messages.append({"role": "system", "content": ctx})
     messages += _history(db, conv)
 
-    model = _model_for(ws_slug, agent_name, db)
+    model = _model_for(conv, ws_slug, db)
     extra = provider_credentials(db, model)
     tool_schemas = _build_tool_schemas(_agent_tools(db, ws_slug, agent_name))
     if tool_schemas:
@@ -397,6 +634,22 @@ async def ws_chat(ws: WebSocket) -> None:
                 ws_slug = body.workspace or settings.default_workspace
                 conv = _get_or_create_conv(db, user, body)
                 agent_name = conv.agent_name
+                # Slash commands short-circuit — no LLM, no streaming.
+                cmd_reply = _try_command(db, user, conv, ws_slug, body.message)
+                if cmd_reply is not None:
+                    _save_system_reply(db, conv, body.message, cmd_reply)
+                    audit(db, action="chat.command", user_id=user.id,
+                          agent_id=conv.agent_name,
+                          details={"conversation": str(conv.id),
+                                   "command": body.message.split()[0],
+                                   "channel": "web-ws"})
+                    await ws.send_json({"type": "meta",
+                                        "conversation_id": str(conv.id),
+                                        "agent": conv.agent_name, "sources": []})
+                    await ws.send_json({"type": "delta", "text": cmd_reply})
+                    await ws.send_json({"type": "done", "model": "system",
+                                        "conversation_id": str(conv.id)})
+                    continue
                 db.add(Message(conversation_id=conv.id, role="user", content=body.message))
                 db.commit()
                 messages = [{"role": "system",
@@ -405,7 +658,7 @@ async def ws_chat(ws: WebSocket) -> None:
                 if ctx:
                     messages.append({"role": "system", "content": ctx})
                 messages += _history(db, conv)
-                model = _model_for(ws_slug, agent_name, db)
+                model = _model_for(conv, ws_slug, db)
                 creds = provider_credentials(db, model)
 
                 await ws.send_json({"type": "meta",
