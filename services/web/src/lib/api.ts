@@ -30,4 +30,17 @@ export const api = {
     }),
   logout: () => request("/auth/logout", { method: "POST" }),
   me: () => request<any>("/me"),
+  agents: () => request<any[]>("/agents"),
+  conversations: () => request<any[]>("/conversations"),
+  conversation: (id: string) => request<any>(`/conversations/${id}`),
+  chat: (body: {
+    message: string;
+    conversation_id?: string | null;
+    agent?: string;
+  }) => request<any>("/chat", { method: "POST", body: JSON.stringify(body) }),
 };
+
+export function chatSocket(): WebSocket {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return new WebSocket(`${proto}://${location.host}/ws/chat`);
+}
