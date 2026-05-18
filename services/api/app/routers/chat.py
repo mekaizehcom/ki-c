@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -9,10 +10,19 @@ from app.audit import audit
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.deps import SESSION_COOKIE, get_current_user
-from app.llm import chat_completion, chat_stream, provider_credentials, resolve_models
+from app.llm import (
+    chat_completion,
+    chat_completion_full,
+    chat_stream,
+    provider_credentials,
+    resolve_models,
+)
 from app.models import Conversation, Message, SessionToken, User
 from app.security import hash_token
 from app.vectors import collection_for, embed_query, hybrid_rerank, search
+from app.tools.engine import decide
+from app.tools.executor import run, run_internal
+from app.tools.registry import REGISTRY, build_argv
 from app.workspace import list_workspace_slugs, load_workspace
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -102,14 +112,111 @@ def _history(db: Session, conv: Conversation) -> list[dict]:
     return [{"role": m.role, "content": m.content} for m in reversed(rows)]
 
 
+MAX_TOOL_ITERATIONS = 5
+
+
+def _agent_tools(db: Session, ws_slug: str, agent_name: str) -> list[str]:
+    ws = load_workspace(ws_slug)
+    a = ws.agents.get(agent_name)
+    return list(a.tools) if a else []
+
+
+def _build_tool_schemas(agent_tool_categories: list[str]) -> list[dict]:
+    """Filter registry to commands whose tool-category the agent may use,
+    and translate to OpenAI/Anthropic function-calling schema."""
+    out: list[dict] = []
+    for cmd in REGISTRY.values():
+        if cmd.tool not in agent_tool_categories:
+            continue
+        if cmd.payload_schema:
+            params = cmd.payload_schema
+        elif cmd.arg_pattern:
+            params = {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            f"Single argument. Must match regex: "
+                            f"{cmd.arg_pattern}"
+                        ),
+                    }
+                },
+                "required": ["target"],
+            }
+        else:
+            params = {"type": "object", "properties": {}}
+        out.append({
+            "type": "function",
+            "function": {
+                "name": cmd.name,
+                "description": cmd.description,
+                "parameters": params,
+            },
+        })
+    return out
+
+
+def _run_tool_in_chat(
+    db: Session, user: User, ws_slug: str, agent_name: str,
+    cmd_name: str, args: dict,
+) -> dict:
+    """Run a tool the model asked for. Goes through the permission engine.
+    Returns a dict that we serialize back to the model as the tool result."""
+    d = decide(db, user, ws_slug, agent_name, cmd_name)
+    audit(db, action="tool.request", user_id=user.id, agent_id=agent_name,
+          risk_level=d.risk,
+          status="denied" if not d.allowed else "pending",
+          details={"command": cmd_name, "args": args, "reason": d.reason,
+                   "via": "chat"})
+
+    if not d.allowed:
+        return {"ok": False, "error": "denied", "reason": d.reason}
+    if d.proposed:
+        return {"ok": False, "status": "proposed",
+                "reason": d.reason,
+                "note": "agent autonomy is 'propose' — tool not executed"}
+    if not d.execute_now:
+        return {"ok": False, "status": "approval_required",
+                "risk": d.risk, "approver_role": d.approver_role,
+                "reason": d.reason,
+                "note": "tell the user this needs approval at /approvals"}
+
+    if d.command.internal is not None:
+        result = run_internal(d.command, args, {"user_id": str(user.id)})
+        details = {"command": cmd_name, "exit_code": result["exit_code"],
+                   "via": "chat"}
+        if cmd_name == "workspace_write" and "result" in result:
+            details["file"] = result["result"].get("file")
+            details["reason"] = result["result"].get("reason")
+            details["diff"] = (result["result"].get("diff") or "")[:4000]
+        audit(db, action="tool.executed", user_id=user.id, agent_id=agent_name,
+              risk_level=d.risk,
+              status="success" if result["exit_code"] == 0 else "failed",
+              details=details)
+        return result.get("result", result) if result["exit_code"] == 0 \
+               else {"ok": False, "error": result.get("stderr", "failed")}
+
+    # subprocess argv tool
+    try:
+        argv = build_argv(d.command, args.get("target"))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    result = run(argv)
+    audit(db, action="tool.executed", user_id=user.id, agent_id=agent_name,
+          risk_level=d.risk,
+          status="success" if result["exit_code"] == 0 else "failed",
+          details={"command": cmd_name, "target": args.get("target"),
+                   "exit_code": result["exit_code"], "via": "chat"})
+    return result
+
+
 async def generate_reply(
     db: Session, user: User, conv: Conversation, message: str, ws_slug: str
 ) -> tuple[str, str, list[dict]]:
-    """Shared turn: store user msg, retrieve, call model, persist, audit.
-
-    Used by REST chat and the SwissChat connector (WS uses its own
-    streaming path).
-    """
+    """Shared turn: store user msg, retrieve, call model (with optional
+    tool-use loop), persist, audit. Used by REST chat and SwissChat.
+    WS path is text-only and bypasses tool-use today."""
     agent_name = conv.agent_name
     db.add(Message(conversation_id=conv.id, role="user", content=message))
     db.commit()
@@ -121,17 +228,53 @@ async def generate_reply(
     messages += _history(db, conv)
 
     model = _model_for(ws_slug, agent_name, db)
-    reply, used = await chat_completion(model, messages,
-                                        provider_credentials(db, model))
+    extra = provider_credentials(db, model)
+    tool_schemas = _build_tool_schemas(_agent_tools(db, ws_slug, agent_name))
+    if tool_schemas:
+        extra["tools"] = tool_schemas
 
-    db.add(Message(conversation_id=conv.id, role="assistant", content=reply,
+    used = model
+    final_text = ""
+    for _ in range(MAX_TOOL_ITERATIONS):
+        msg, used = await chat_completion_full(model, messages, extra)
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            final_text = msg.get("content") or ""
+            break
+        messages.append({
+            "role": "assistant",
+            "content": msg.get("content") or "",
+            "tool_calls": tool_calls,
+        })
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            cmd_name = fn.get("name") or ""
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            tool_result = _run_tool_in_chat(
+                db, user, ws_slug, agent_name, cmd_name, args
+            )
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "name": cmd_name,
+                "content": json.dumps(tool_result, ensure_ascii=False)[:16000],
+            })
+    else:
+        final_text = ("(Tool-Schleife unterbrochen nach "
+                      f"{MAX_TOOL_ITERATIONS} Iterationen.)")
+
+    db.add(Message(conversation_id=conv.id, role="assistant", content=final_text,
                    model=used, meta={"sources": sources}))
     conv.updated_at = conv.updated_at  # touch via onupdate
     db.commit()
     audit(db, action="chat.message", user_id=user.id, agent_id=agent_name,
           details={"model": used, "conversation": str(conv.id),
-                   "sources": len(sources), "channel": conv.channel})
-    return reply, used, sources
+                   "sources": len(sources), "channel": conv.channel,
+                   "tool_use": bool(tool_schemas)})
+    return final_text, used, sources
 
 
 @router.get("/workspaces")

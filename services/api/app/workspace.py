@@ -29,6 +29,7 @@ class AgentDef:
     tools: list[str] = field(default_factory=list)
     autonomy: str = "approve_required"
     approval_actions: list[str] = field(default_factory=list)
+    allowed_auto_actions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -110,6 +111,7 @@ def _parse_agents(md: str) -> dict[str, AgentDef]:
             autonomy=(lb.get("autonomie", ["approve_required"]) or
                       ["approve_required"])[0].strip() or "approve_required",
             approval_actions=lb.get("approval erforderlich für", []),
+            allowed_auto_actions=lb.get("erlaubte autonome aktionen", []),
         )
     return agents
 
@@ -203,6 +205,7 @@ def sync_to_db(db: Session, ws: WorkspaceDef) -> None:
                 workspace_id=row.id, name=name, purpose=a.purpose,
                 model_profile=a.model_profile, tools=a.tools,
                 autonomy=a.autonomy, approval_actions=a.approval_actions,
+                allowed_auto_actions=a.allowed_auto_actions,
             ))
         else:
             ag.purpose = a.purpose
@@ -210,4 +213,5 @@ def sync_to_db(db: Session, ws: WorkspaceDef) -> None:
             ag.tools = a.tools
             ag.autonomy = a.autonomy
             ag.approval_actions = a.approval_actions
+            ag.allowed_auto_actions = a.allowed_auto_actions
     db.commit()

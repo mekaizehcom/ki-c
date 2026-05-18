@@ -11,7 +11,7 @@ services:
     volumes:
       - ./services/api/app:/srv/app
       - ./services/api/migrations:/srv/migrations
-      - ./workspaces:/workspaces:ro
+      - ./workspaces:/workspaces:rw
       - uploads:/data/uploads
     ports:
       - "8000:8000"

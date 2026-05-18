@@ -12,7 +12,7 @@ from app.db import get_db
 from app.deps import get_current_user, require_role
 from app.models import Approval, User
 from app.tools.engine import decide
-from app.tools.executor import run
+from app.tools.executor import run, run_internal
 from app.tools.registry import REGISTRY, build_argv
 
 router = APIRouter(prefix="/api", tags=["tools"])
@@ -23,6 +23,7 @@ class ExecuteRequest(BaseModel):
     command: str
     target: str | None = None
     workspace: str | None = None
+    payload: dict | None = None  # for internal tools (e.g. workspace_write)
 
 
 class DecisionRequest(BaseModel):
@@ -34,7 +35,9 @@ def list_tools(_: User = Depends(get_current_user)) -> list[dict]:
     return [
         {"name": c.name, "tool": c.tool, "risk": c.risk,
          "approval_required": c.approval_required, "description": c.description,
-         "takes_target": c.arg_pattern is not None}
+         "takes_target": c.arg_pattern is not None,
+         "internal": c.internal is not None,
+         "payload_schema": c.payload_schema}
         for c in REGISTRY.values()
     ]
 
@@ -55,7 +58,12 @@ def execute(
     if not d.allowed:
         raise HTTPException(status.HTTP_403_FORBIDDEN, d.reason)
 
+    is_internal = d.command.internal is not None
+
     if d.proposed:
+        if is_internal:
+            return {"status": "proposed", "reason": d.reason,
+                    "would_call": d.command.internal, "payload": body.payload}
         try:
             argv = build_argv(d.command, body.target)
         except ValueError as exc:
@@ -63,6 +71,19 @@ def execute(
         return {"status": "proposed", "reason": d.reason, "would_run": argv}
 
     if d.execute_now:
+        if is_internal:
+            result = run_internal(d.command, body.payload or {},
+                                  {"user_id": str(user.id)})
+            details = {"command": body.command, "exit_code": result["exit_code"]}
+            if body.command == "workspace_write" and "result" in result:
+                details["file"] = result["result"].get("file")
+                details["reason"] = result["result"].get("reason")
+                details["diff"] = result["result"].get("diff", "")[:4000]
+            audit(db, action="tool.executed", user_id=user.id,
+                  agent_id=body.agent, risk_level=d.risk,
+                  status="success" if result["exit_code"] == 0 else "failed",
+                  details=details)
+            return {"status": "executed", "reason": d.reason, "result": result}
         try:
             argv = build_argv(d.command, body.target)
         except ValueError as exc:
@@ -75,11 +96,12 @@ def execute(
                        "exit_code": result["exit_code"]})
         return {"status": "executed", "reason": d.reason, "result": result}
 
-    # approval required — validate target now so we fail fast
-    try:
-        build_argv(d.command, body.target)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    # approval required — validate input now so we fail fast
+    if not is_internal:
+        try:
+            build_argv(d.command, body.target)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     ap = create_approval(db, user, ws, body.agent, body.command, body.target, d)
     return {
         "status": "pending_approval",

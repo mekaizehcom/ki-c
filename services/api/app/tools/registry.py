@@ -16,12 +16,14 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Command:
     name: str
-    argv: list[str]
-    tool: str                 # category, must be in the agent's TOOLS list
+    argv: list[str]            # may be empty when `internal` is set
+    tool: str                  # category, must be in the agent's TOOLS list
     risk: str
     approval_required: bool
     description: str
-    arg_pattern: str | None = None   # regex for an optional single argument
+    arg_pattern: str | None = None  # regex for an optional single argument
+    internal: str | None = None     # key into INTERNAL_ACTIONS; in-process tool
+    payload_schema: dict | None = None  # JSON schema for an internal-tool payload
 
 
 REGISTRY: dict[str, Command] = {
@@ -72,6 +74,46 @@ REGISTRY: dict[str, Command] = {
                            "critical", True,
                            "Delete a path (target=path)",
                            arg_pattern=r"/[\w./-]{2,200}"),
+    # ---- workspace self-editing (in-process; the agent's own files) ----
+    "workspace_read": Command(
+        "workspace_read", [], "workspace", "low", False,
+        "Read a workspace steering file. payload: {file: SOUL|AGENTS|TOOLS|"
+        "POLICIES|MEMORY|MODELS|ROUTING|VECTOR|APPROVALS, workspace?: slug}",
+        internal="workspace_read",
+        payload_schema={
+            "type": "object",
+            "required": ["file"],
+            "properties": {
+                "file": {"type": "string",
+                         "enum": ["SOUL", "AGENTS", "TOOLS", "POLICIES",
+                                  "MEMORY", "MODELS", "ROUTING", "VECTOR",
+                                  "APPROVALS"]},
+                "workspace": {"type": "string"},
+            },
+        },
+    ),
+    "workspace_write": Command(
+        "workspace_write", [], "workspace", "medium", False,
+        "Overwrite a workspace steering file. The agent should call this "
+        "when its understanding of itself has changed. payload: "
+        "{file, content, reason}. Audit captures a unified diff.",
+        internal="workspace_write",
+        payload_schema={
+            "type": "object",
+            "required": ["file", "content", "reason"],
+            "properties": {
+                "file": {"type": "string",
+                         "enum": ["SOUL", "AGENTS", "TOOLS", "POLICIES",
+                                  "MEMORY", "MODELS", "ROUTING", "VECTOR",
+                                  "APPROVALS"]},
+                "content": {"type": "string"},
+                "reason": {"type": "string",
+                           "description": "One short sentence — why you "
+                                          "are changing this file."},
+                "workspace": {"type": "string"},
+            },
+        },
+    ),
 }
 
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}

@@ -12,9 +12,14 @@ Tools:
 - read_memory
 - write_memory_proposal
 - document_reader
+- workspace
 
 Autonomie:
-low
+scoped_auto
+
+Erlaubte autonome Aktionen:
+- workspace_read
+- workspace_write
 
 ---
 
@@ -62,9 +67,14 @@ Tools:
 - vector_admin
 - audit_reader
 - service_manager
+- workspace
 
 Autonomie:
-admin-configurable
+scoped_auto
+
+Erlaubte autonome Aktionen:
+- workspace_read
+- workspace_write
 
 ---
 
@@ -98,6 +108,11 @@ Tools:
 - vector_write
 - vector_search
 - metadata_extractor
+- workspace
 
 Autonomie:
-medium
+scoped_auto
+
+Erlaubte autonome Aktionen:
+- workspace_read
+- workspace_write

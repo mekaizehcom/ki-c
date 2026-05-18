@@ -11,7 +11,7 @@ services:
     environment:
       TESSA_WORKSPACES_DIR: /workspaces
     volumes:
-      - ./workspaces:/workspaces:ro
+      - ./workspaces:/workspaces:rw
       - uploads:/data/uploads
     depends_on:
       postgres:
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
     env_file: [.env]
     volumes:
-      - ./workspaces:/workspaces:ro
+      - ./workspaces:/workspaces:rw
       - uploads:/data/uploads
     depends_on:
       postgres:

@@ -99,7 +99,21 @@ def _headers() -> dict:
 async def chat_completion(
     model: str, messages: list[dict], extra: dict | None = None
 ) -> tuple[str, str]:
-    """Non-streaming. Returns (text, model_used). Falls back to mock-echo."""
+    """Non-streaming. Returns (text, model_used). Falls back to mock-echo.
+
+    For tool-using turns, see `chat_completion_full` which surfaces the
+    full assistant message (content + tool_calls).
+    """
+    msg, used = await chat_completion_full(model, messages, extra)
+    return msg.get("content") or "", used
+
+
+async def chat_completion_full(
+    model: str, messages: list[dict], extra: dict | None = None
+) -> tuple[dict, str]:
+    """Non-streaming. Returns the full assistant `message` dict
+    (with `content` and optional `tool_calls`) plus the model name used.
+    Falls back to mock-echo on any provider failure."""
     url = f"{settings.litellm_base_url}/chat/completions"
     async with httpx.AsyncClient(timeout=120) as client:
         for m in (model, MOCK_MODEL):
@@ -107,14 +121,22 @@ async def chat_completion(
                 body = {"model": m, "messages": messages}
                 if m == model and extra:
                     body.update(extra)
+                # mock-echo doesn't function-call; drop tools if we fell back
+                if m == MOCK_MODEL and "tools" in body:
+                    body.pop("tools", None)
+                    body.pop("tool_choice", None)
                 r = await client.post(url, headers=_headers(), json=body)
                 r.raise_for_status()
                 data = r.json()
-                return data["choices"][0]["message"]["content"], m
+                return data["choices"][0]["message"], m
             except Exception:
                 continue
-    return ("Tessa konnte kein Modell erreichen. Bitte Provider-Key im "
-            "Admin-Bereich konfigurieren."), "none"
+    return (
+        {"role": "assistant",
+         "content": "Tessa konnte kein Modell erreichen. Bitte Provider-Key "
+                    "im Admin-Bereich konfigurieren."},
+        "none",
+    )
 
 
 async def chat_stream(

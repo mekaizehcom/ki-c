@@ -21,6 +21,9 @@ Phase. 23 Unit-Tests laufen grün.
 | 7 — Hardening | ✅ | Multi-WS, Hybrid-RAG, Healthchecks, Backup, CI | `f2fd7d5` |
 | Prod-Deploy | ✅ | Prod-Overlay live, Let's-Encrypt-Cert | `adac2e2`+ |
 | SwissChat-Fix | ✅ | `/bots/messages`-Endpoint statt `/messages` | `d52baef` |
+| Memory Bank | ✅ | Cline-Stil, 6 Dateien + AGENT_BOOTSTRAP | `27ccce1` |
+| SOUL-Rewrite | ✅ | User-authored, opinionated identity | `098f75a` |
+| Agent Self-Edit | ✅ | `workspace_*` internal tools + chat tool-use loop | (siehe HEAD) |
 
 ## Was nachweislich funktioniert (E2E geprüft)
 

@@ -21,7 +21,26 @@ Die noch laufende Aufgabe für den Endnutzer ist die **User-Verlinkung**:
 
 ## Letzte Entscheidungen (jüngste zuerst)
 
-1. **SwissChat-Outbound geht über `POST /api/v1/bots/messages`,
+1. **Agent kann seine eigenen Steering-Dateien selbst editieren.** Die
+   `workspaces/`-Mount ist jetzt RW, zwei neue *internal* Tools
+   (`workspace_read` / `workspace_write`) laufen in-process durch
+   dieselbe Permission/Audit-Pipeline wie die argv-Tools. Chat-Path
+   hat jetzt eine **Tool-Use-Schleife** (OpenAI/Anthropic function
+   calling via LiteLLM, bis zu 5 Iterationen pro Turn).
+   - `main`, `tessa-admin`, `document-agent` haben `Tools: workspace`,
+     `Autonomie: scoped_auto`, whitelist `[workspace_read, workspace_write]`.
+   - `workspace_write` ist `approval_required=False` — SOUL.md sagt
+     "yours to evolve". Audit erfasst die unified diff bei jedem Write.
+   - AGENTS.md-Parser liest jetzt zusätzlich `Erlaubte autonome Aktionen:`.
+   - **End-to-end verifiziert:** gpt-4.1 hat im Chat `workspace_write`
+     aufgerufen, MEMORY.md erweitert, Diff im Audit gelandet; danach
+     manuell zurückgesetzt.
+   - Caveat: Tool-Use läuft nur im REST-`/api/chat`-Pfad. Die WS-
+     Streaming-Route bleibt text-only. Wenn die Web-UI Tools nutzen
+     soll, ggf. für tool-fähige Agents auf REST umstellen.
+2. **Memory Bank im Cline-Stil angelegt** — `memory-bank/` mit 6
+   strukturierten Markdown-Dateien plus `AGENT_BOOTSTRAP.md`.
+3. **SwissChat-Outbound geht über `POST /api/v1/bots/messages`,
    nicht `/api/v1/messages`.** Die öffentliche Bot-Protocol-Doku
    verschweigt das, der Live-Server erzwingt aber `sealed envelope`
    (ADR-021) auf `/messages`. Bots haben einen Ausnahme-Pfad

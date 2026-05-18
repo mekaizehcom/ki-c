@@ -77,6 +77,25 @@ Erlaubt:
 
 ---
 
+## workspace
+
+Self-editing of the agent's own steering files.
+
+Erlaubt:
+- workspace_read  (SOUL, AGENTS, TOOLS, POLICIES, MEMORY, MODELS,
+                   ROUTING, VECTOR, APPROVALS)
+- workspace_write (gleiche Dateien)
+
+Approval:
+nicht erforderlich. SOUL.md sagt explizit: "These files _are_ your memory.
+Read them. Update them." Audit-Log erfasst die vollständige Diff.
+
+Erwartung:
+Wenn die Agent ihre SOUL ändert, soll sie das in der Konversation
+erwähnen — siehe SOUL.md "If you change this file, tell the user".
+
+---
+
 ## swisschat
 
 Erlaubt:
