@@ -46,3 +46,6 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # Allow Tessa to pass provider api_key/api_base per request so keys
+  # entered in the Admin panel take effect without a gateway restart.
+  allow_client_side_credentials: true

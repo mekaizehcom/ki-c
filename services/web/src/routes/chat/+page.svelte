@@ -181,7 +181,7 @@
       </div>
       <div style="display:flex;gap:0.5rem;font-size:0.8rem;justify-content:center;">
         <a href="/tools">Tools</a> · <a href="/approvals">Approvals</a> ·
-        <a href="/settings">Settings</a>
+        <a href="/settings">Settings</a> · <a href="/admin">Admin</a>
       </div>
       <button on:click={logout} style="background:#30363d;">Logout</button>
     </aside>

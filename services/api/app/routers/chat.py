@@ -9,7 +9,7 @@ from app.audit import audit
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.deps import SESSION_COOKIE, get_current_user
-from app.llm import chat_completion, chat_stream, resolve_models
+from app.llm import chat_completion, chat_stream, provider_credentials, resolve_models
 from app.models import Conversation, Message, SessionToken, User
 from app.security import hash_token
 from app.vectors import collection_for, embed_query, search
@@ -120,7 +120,8 @@ async def generate_reply(
     messages += _history(db, conv)
 
     model = _model_for(ws_slug, agent_name, db)
-    reply, used = await chat_completion(model, messages)
+    reply, used = await chat_completion(model, messages,
+                                        provider_credentials(db, model))
 
     db.add(Message(conversation_id=conv.id, role="assistant", content=reply,
                    model=used, meta={"sources": sources}))
@@ -255,13 +256,14 @@ async def ws_chat(ws: WebSocket) -> None:
                     messages.append({"role": "system", "content": ctx})
                 messages += _history(db, conv)
                 model = _model_for(ws_slug, agent_name, db)
+                creds = provider_credentials(db, model)
 
                 await ws.send_json({"type": "meta",
                                     "conversation_id": str(conv.id),
                                     "agent": agent_name,
                                     "sources": sources})
                 full, used = "", model
-                async for delta, m in chat_stream(model, messages):
+                async for delta, m in chat_stream(model, messages, creds):
                     full += delta
                     used = m
                     await ws.send_json({"type": "delta", "text": delta})

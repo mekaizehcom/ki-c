@@ -38,6 +38,21 @@ export const api = {
     conversation_id?: string | null;
     agent?: string;
   }) => request<any>("/chat", { method: "POST", body: JSON.stringify(body) }),
+  adminSystem: () => request<any>("/admin/system"),
+  adminUsers: () => request<any[]>("/admin/users"),
+  createUser: (b: any) =>
+    request<any>("/admin/users", { method: "POST", body: JSON.stringify(b) }),
+  updateUser: (username: string, b: any) =>
+    request<any>(`/admin/users/${username}`, { method: "PUT", body: JSON.stringify(b) }),
+  adminProviders: () => request<any[]>("/admin/models"),
+  setProvider: (p: string, b: any) =>
+    request<any>(`/admin/models/${p}`, { method: "PUT", body: JSON.stringify(b) }),
+  adminAgents: () => request<any[]>("/admin/agents"),
+  setAgent: (name: string, b: any) =>
+    request<any>(`/admin/agents/${name}`, { method: "PUT", body: JSON.stringify(b) }),
+  adminAudit: () => request<any[]>("/admin/audit?limit=50"),
+  reindexFailed: () =>
+    request<any>("/admin/vector/reindex-failed", { method: "POST" }),
   listTools: () => request<any[]>("/tools"),
   executeTool: (body: { agent: string; command: string; target?: string | null }) =>
     request<any>("/tools/execute", { method: "POST", body: JSON.stringify(body) }),

@@ -57,6 +57,28 @@ def _provider_available(db: Session | None, provider: str) -> bool:
     return False
 
 
+def provider_credentials(db: Session | None, model: str) -> dict:
+    """Resolve {api_key, api_base} for a model: DB (admin UI) wins over env.
+
+    Returned dict is merged into the LiteLLM request body so UI-entered
+    keys take effect without restarting the gateway.
+    """
+    if model == MOCK_MODEL:
+        return {}
+    provider = PROVIDER_OF.get(model, "")
+    if db is not None:
+        row = db.get(ModelProvider, provider)
+        if row and row.enabled and row.api_key_encrypted:
+            from app.security import decrypt
+
+            out: dict = {"api_key": decrypt(row.api_key_encrypted)}
+            if row.base_url:
+                out["api_base"] = row.base_url
+            return out
+    key = _ENV_KEY.get(provider)
+    return {"api_key": key} if key else {}
+
+
 def resolve_models(profile_providers: list[str], db: Session | None = None) -> list[str]:
     """Ordered list of usable LiteLLM model names, mock-echo last."""
     out: list[str] = []
@@ -74,16 +96,18 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {settings.litellm_master_key}"}
 
 
-async def chat_completion(model: str, messages: list[dict]) -> tuple[str, str]:
+async def chat_completion(
+    model: str, messages: list[dict], extra: dict | None = None
+) -> tuple[str, str]:
     """Non-streaming. Returns (text, model_used). Falls back to mock-echo."""
     url = f"{settings.litellm_base_url}/chat/completions"
     async with httpx.AsyncClient(timeout=120) as client:
         for m in (model, MOCK_MODEL):
             try:
-                r = await client.post(
-                    url, headers=_headers(),
-                    json={"model": m, "messages": messages},
-                )
+                body = {"model": m, "messages": messages}
+                if m == model and extra:
+                    body.update(extra)
+                r = await client.post(url, headers=_headers(), json=body)
                 r.raise_for_status()
                 data = r.json()
                 return data["choices"][0]["message"]["content"], m
@@ -93,15 +117,19 @@ async def chat_completion(model: str, messages: list[dict]) -> tuple[str, str]:
             "Admin-Bereich konfigurieren."), "none"
 
 
-async def chat_stream(model: str, messages: list[dict]) -> AsyncIterator[tuple[str, str]]:
+async def chat_stream(
+    model: str, messages: list[dict], extra: dict | None = None
+) -> AsyncIterator[tuple[str, str]]:
     """Yields (delta_text, model_used). Falls back to mock-echo on failure."""
     url = f"{settings.litellm_base_url}/chat/completions"
     async with httpx.AsyncClient(timeout=120) as client:
         for m in (model, MOCK_MODEL):
             try:
+                body = {"model": m, "messages": messages, "stream": True}
+                if m == model and extra:
+                    body.update(extra)
                 async with client.stream(
-                    "POST", url, headers=_headers(),
-                    json={"model": m, "messages": messages, "stream": True},
+                    "POST", url, headers=_headers(), json=body,
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
