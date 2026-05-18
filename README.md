@@ -40,5 +40,13 @@ bash infra/scripts/issue-cert.sh   # Let's Encrypt
 
 See `TESSA_SYSTEM_ARCHITECTURE.md` and `docs/` for full design.
 
+## Memory Bank
+
+`memory-bank/` is the living, Cline-style project context (project brief,
+product context, system patterns, tech context, active context, progress).
+**Start a new session by reading `memory-bank/AGENT_BOOTSTRAP.md`.** The
+bank is the source of truth for "what we built and why"; `docs/architecture.md`
+is the frozen original spec.
+
 ## Make targets
 `make up` · `make down` · `make logs` · `make ps` · `make test` · `make prod`
