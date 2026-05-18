@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db import SessionLocal
-from app.routers import admin, auth, chat, documents, health, me
+from app.routers import admin, auth, chat, documents, health, me, swisschat
 from app.workspace import load_workspace, sync_to_db
 
 
@@ -43,6 +43,9 @@ app.include_router(admin.router)
 app.include_router(chat.router)
 app.include_router(chat.ws_router)
 app.include_router(documents.router)
+app.include_router(swisschat.router)
+app.include_router(swisschat.api_router)
+app.include_router(swisschat.admin_router)
 
 
 @app.get("/api")

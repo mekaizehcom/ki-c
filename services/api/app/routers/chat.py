@@ -101,6 +101,37 @@ def _history(db: Session, conv: Conversation) -> list[dict]:
     return [{"role": m.role, "content": m.content} for m in reversed(rows)]
 
 
+async def generate_reply(
+    db: Session, user: User, conv: Conversation, message: str, ws_slug: str
+) -> tuple[str, str, list[dict]]:
+    """Shared turn: store user msg, retrieve, call model, persist, audit.
+
+    Used by REST chat and the SwissChat connector (WS uses its own
+    streaming path).
+    """
+    agent_name = conv.agent_name
+    db.add(Message(conversation_id=conv.id, role="user", content=message))
+    db.commit()
+
+    messages = [{"role": "system", "content": _system_prompt(ws_slug, agent_name)}]
+    ctx, sources = _retrieval(user, ws_slug, message)
+    if ctx:
+        messages.append({"role": "system", "content": ctx})
+    messages += _history(db, conv)
+
+    model = _model_for(ws_slug, agent_name, db)
+    reply, used = await chat_completion(model, messages)
+
+    db.add(Message(conversation_id=conv.id, role="assistant", content=reply,
+                   model=used, meta={"sources": sources}))
+    conv.updated_at = conv.updated_at  # touch via onupdate
+    db.commit()
+    audit(db, action="chat.message", user_id=user.id, agent_id=agent_name,
+          details={"model": used, "conversation": str(conv.id),
+                   "sources": len(sources), "channel": conv.channel})
+    return reply, used, sources
+
+
 @router.get("/workspaces")
 def list_workspaces(_: User = Depends(get_current_user)) -> list[dict]:
     ws = load_workspace(settings.default_workspace)
@@ -175,33 +206,12 @@ async def chat(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty message")
     ws_slug = body.workspace or settings.default_workspace
     conv = _get_or_create_conv(db, user, body)
-    agent_name = conv.agent_name
-
-    db.add(Message(conversation_id=conv.id, role="user", content=body.message))
-    db.commit()
-
-    messages = [{"role": "system", "content": _system_prompt(ws_slug, agent_name)}]
-    ctx, sources = _retrieval(user, ws_slug, body.message)
-    if ctx:
-        messages.append({"role": "system", "content": ctx})
-    messages += _history(db, conv)
-
-    model = _model_for(ws_slug, agent_name, db)
-    reply, used = await chat_completion(model, messages)
-
-    db.add(Message(conversation_id=conv.id, role="assistant", content=reply,
-                   model=used, meta={"sources": sources}))
-    conv.updated_at = conv.updated_at  # touch via onupdate
-    db.commit()
-    audit(db, action="chat.message", user_id=user.id, agent_id=agent_name,
-          details={"model": used, "conversation": str(conv.id),
-                   "sources": len(sources)})
-
+    reply, used, sources = await generate_reply(db, user, conv, body.message, ws_slug)
     return {
         "conversation_id": str(conv.id),
         "reply": reply,
         "model": used,
-        "agent": agent_name,
+        "agent": conv.agent_name,
         "sources": sources,
     }
 

@@ -146,6 +146,7 @@ class Conversation(Base, TimestampMixin):
     agent_name: Mapped[str] = mapped_column(String(80), default="main")
     title: Mapped[str] = mapped_column(String(200), default="New conversation")
     status: Mapped[str] = mapped_column(String(20), default="active")
+    external_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
 
 
 class Message(Base):
@@ -237,6 +238,20 @@ class SwisschatAccount(Base):
     link_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     linked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class IntegrationCredential(Base, TimestampMixin):
+    """Encrypted credential blob for an external integration (e.g. swisschat).
+
+    `data_encrypted` is Fernet(JSON) holding tokens/secrets; `public` holds
+    non-secret metadata safe to display in the admin UI.
+    """
+
+    __tablename__ = "integration_credentials"
+    name: Mapped[str] = mapped_column(String(60), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    data_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    public: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
 class SystemEvent(Base):

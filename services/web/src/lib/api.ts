@@ -38,6 +38,12 @@ export const api = {
     conversation_id?: string | null;
     agent?: string;
   }) => request<any>("/chat", { method: "POST", body: JSON.stringify(body) }),
+  swisschatMe: () => request<any[]>("/swisschat/me"),
+  swisschatLink: (code: string, totp_code: string) =>
+    request<any>("/swisschat/link", {
+      method: "POST",
+      body: JSON.stringify({ code, totp_code }),
+    }),
   listDocuments: () => request<any[]>("/documents"),
   uploadDocument: async (file: File, visibility = "workspace") => {
     const fd = new FormData();

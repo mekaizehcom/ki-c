@@ -179,6 +179,7 @@
           {/each}
         </div>
       </div>
+      <a href="/settings" style="font-size:0.82rem;text-align:center;">Settings · Link SwissChat</a>
       <button on:click={logout} style="background:#30363d;">Logout</button>
     </aside>
 
