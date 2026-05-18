@@ -63,6 +63,21 @@ def extract_text(path: str, ext: str) -> str:
 
         d = docx.Document(path)
         return "\n".join(p.text for p in d.paragraphs)
+    if ext == ".eml":
+        import email
+        from email import policy
+
+        with open(path, "rb") as fh:
+            msg = email.message_from_binary_file(fh, policy=policy.default)
+        head = " ".join(
+            f"{k}: {msg[k]}" for k in ("From", "To", "Subject", "Date") if msg[k]
+        )
+        try:
+            body_part = msg.get_body(preferencelist=("plain", "html"))
+            body = body_part.get_content() if body_part else ""
+        except Exception:
+            body = msg.get_payload(decode=False) if not msg.is_multipart() else ""
+        return f"{head}\n\n{body}"
     return ""
 
 

@@ -30,12 +30,13 @@ bash infra/scripts/issue-cert.sh   # Let's Encrypt
 
 ## Build phases
 1. Foundation (Docker, Postgres, Nginx/TLS, TOTP auth) ✅
-2. Agent core (workspace loader, orchestrator, LiteLLM chat)
-3. Vector system (Qdrant ingestion + retrieval)
-4. SwissChat connector
-5. Tool & approval engine
-6. Admin autonomy
-7. Hardening & extension
+2. Agent core (workspace loader, orchestrator, LiteLLM chat) ✅
+3. Vector system (Qdrant ingestion + retrieval) ✅
+4. SwissChat connector (Bot Protocol v1) ✅
+5. Tool & approval engine ✅
+6. Admin autonomy (provider keys, agent autonomy) ✅
+7. Hardening & extension (multi-workspace, hybrid RAG, monitoring,
+   backups, CI) ✅
 
 See `TESSA_SYSTEM_ARCHITECTURE.md` and `docs/` for full design.
 

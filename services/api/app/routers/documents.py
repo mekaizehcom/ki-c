@@ -16,7 +16,8 @@ from app.queue import enqueue_ingest
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 UPLOAD_DIR = "/data/uploads"
-ALLOWED_EXT = {".md", ".txt", ".pdf", ".docx", ".html", ".htm", ".csv", ".json", ".log"}
+ALLOWED_EXT = {".md", ".txt", ".pdf", ".docx", ".html", ".htm", ".csv",
+               ".json", ".log", ".eml"}
 VALID_VISIBILITY = {"user_private", "team", "workspace", "admin", "global"}
 
 

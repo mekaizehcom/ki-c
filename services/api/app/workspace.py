@@ -156,6 +156,21 @@ def load_workspace(slug: str) -> WorkspaceDef:
     )
 
 
+def list_workspace_slugs() -> list[str]:
+    base = settings.tessa_workspaces_dir
+    if not os.path.isdir(base):
+        return [settings.default_workspace]
+    slugs = []
+    for entry in sorted(os.listdir(base)):
+        d = os.path.join(base, entry)
+        if os.path.isdir(d) and (
+            os.path.isfile(os.path.join(d, "config", "workspace.yaml"))
+            or os.path.isfile(os.path.join(d, "SOUL.md"))
+        ):
+            slugs.append(entry)
+    return slugs or [settings.default_workspace]
+
+
 def clear_cache() -> None:
     load_workspace.cache_clear()
 

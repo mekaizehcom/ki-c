@@ -6,16 +6,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db import SessionLocal
 from app.routers import admin, auth, chat, documents, health, me, swisschat, tools
-from app.workspace import load_workspace, sync_to_db
+from app.workspace import list_workspace_slugs, load_workspace, sync_to_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
-        sync_to_db(db, load_workspace(settings.default_workspace))
-    except Exception as exc:  # noqa: BLE001
-        print(f"[startup] workspace sync skipped: {exc}", flush=True)
+        for slug in list_workspace_slugs():
+            try:
+                sync_to_db(db, load_workspace(slug))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[startup] workspace '{slug}' sync skipped: {exc}",
+                      flush=True)
     finally:
         db.close()
     yield

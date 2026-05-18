@@ -40,6 +40,17 @@ model_list:
       model: deepseek/deepseek-reasoner
       api_key: os.environ/DEEPSEEK_API_KEY
 
+  # ---- External local model nodes (local-private profile) ----
+  # Hosted on separate GPU/CPU nodes, never on the Tessa host.
+  - model_name: local-qwen
+    litellm_params:
+      model: ollama/qwen2.5
+      api_base: os.environ/MODEL_NODE_1_URL
+  - model_name: local-llama
+    litellm_params:
+      model: ollama/llama3.1
+      api_base: os.environ/MODEL_NODE_1_URL
+
 litellm_settings:
   drop_params: true
   request_timeout: 120

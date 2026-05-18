@@ -59,6 +59,21 @@ def embed_query(text: str) -> list[float]:
     return embed_text(text, dim)
 
 
+def _tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]{3,}", text.lower()))
+
+
+def hybrid_rerank(query: str, hits: list[dict], top_k: int = 5) -> list[dict]:
+    """Blend vector score with lexical overlap (simple hybrid retrieval)."""
+    q = _tokens(query)
+    if not q:
+        return hits[:top_k]
+    for h in hits:
+        overlap = len(q & _tokens(h.get("text", ""))) / len(q)
+        h["score"] = round(0.6 * float(h.get("score", 0.0)) + 0.4 * overlap, 6)
+    return sorted(hits, key=lambda x: x["score"], reverse=True)[:top_k]
+
+
 def _client() -> QdrantClient:
     return QdrantClient(url=settings.qdrant_url, timeout=30)
 

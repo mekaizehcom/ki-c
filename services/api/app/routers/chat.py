@@ -12,8 +12,8 @@ from app.deps import SESSION_COOKIE, get_current_user
 from app.llm import chat_completion, chat_stream, provider_credentials, resolve_models
 from app.models import Conversation, Message, SessionToken, User
 from app.security import hash_token
-from app.vectors import collection_for, embed_query, search
-from app.workspace import load_workspace
+from app.vectors import collection_for, embed_query, hybrid_rerank, search
+from app.workspace import list_workspace_slugs, load_workspace
 
 router = APIRouter(prefix="/api", tags=["chat"])
 ws_router = APIRouter(tags=["chat-ws"])  # no /api prefix: nginx routes /ws/
@@ -75,8 +75,9 @@ def _retrieval(user: User, ws_slug: str, query: str) -> tuple[str, list[dict]]:
             role=user.role,
             user_id=str(user.id),
             workspace_id=None,
-            top_k=5,
+            top_k=10,
         )
+        hits = hybrid_rerank(query, hits, top_k=5)
     except Exception:
         hits = []
     if not hits:
@@ -135,8 +136,14 @@ async def generate_reply(
 
 @router.get("/workspaces")
 def list_workspaces(_: User = Depends(get_current_user)) -> list[dict]:
-    ws = load_workspace(settings.default_workspace)
-    return [{"slug": ws.slug, "name": ws.name}]
+    out = []
+    for slug in list_workspace_slugs():
+        try:
+            ws = load_workspace(slug)
+            out.append({"slug": ws.slug, "name": ws.name})
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 @router.get("/agents")
