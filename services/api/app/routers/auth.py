@@ -101,6 +101,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> LoginStep1Respon
             status="totp_enroll",
             challenge_id=_make_challenge(str(user.id), "enroll"),
             enroll_uri=uri,
+            enroll_secret=secret,
         )
 
     audit(db, action="login.password_ok", user_id=user.id)

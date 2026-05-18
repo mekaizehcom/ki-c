@@ -19,10 +19,15 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ status: string; challenge_id: string; enroll_uri: string | null }>(
-      "/auth/login",
-      { method: "POST", body: JSON.stringify({ username, password }) }
-    ),
+    request<{
+      status: string;
+      challenge_id: string;
+      enroll_uri: string | null;
+      enroll_secret: string | null;
+    }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
   totpVerify: (challenge_id: string, code: string) =>
     request<{ status: string; user: any }>("/auth/totp/verify", {
       method: "POST",

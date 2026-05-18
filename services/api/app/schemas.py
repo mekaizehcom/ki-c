@@ -11,7 +11,8 @@ class LoginRequest(BaseModel):
 class LoginStep1Response(BaseModel):
     status: str  # "totp_required" | "totp_enroll"
     challenge_id: str
-    enroll_uri: str | None = None  # present when the user must first enroll TOTP
+    enroll_uri: str | None = None     # present when the user must first enroll TOTP
+    enroll_secret: str | None = None  # raw base32 secret for manual entry
 
 
 class TotpVerifyRequest(BaseModel):
