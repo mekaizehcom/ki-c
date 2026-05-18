@@ -38,6 +38,17 @@ export const api = {
     conversation_id?: string | null;
     agent?: string;
   }) => request<any>("/chat", { method: "POST", body: JSON.stringify(body) }),
+  listTools: () => request<any[]>("/tools"),
+  executeTool: (body: { agent: string; command: string; target?: string | null }) =>
+    request<any>("/tools/execute", { method: "POST", body: JSON.stringify(body) }),
+  listApprovals: () => request<any[]>("/approvals"),
+  approve: (id: string, totp_code?: string) =>
+    request<any>(`/approvals/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ totp_code: totp_code || null }),
+    }),
+  deny: (id: string) =>
+    request<any>(`/approvals/${id}/deny`, { method: "POST" }),
   swisschatMe: () => request<any[]>("/swisschat/me"),
   swisschatLink: (code: string, totp_code: string) =>
     request<any>("/swisschat/link", {

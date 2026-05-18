@@ -179,7 +179,10 @@
           {/each}
         </div>
       </div>
-      <a href="/settings" style="font-size:0.82rem;text-align:center;">Settings · Link SwissChat</a>
+      <div style="display:flex;gap:0.5rem;font-size:0.8rem;justify-content:center;">
+        <a href="/tools">Tools</a> · <a href="/approvals">Approvals</a> ·
+        <a href="/settings">Settings</a>
+      </div>
       <button on:click={logout} style="background:#30363d;">Logout</button>
     </aside>
 

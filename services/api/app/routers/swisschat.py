@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.approvals import finalize_approval
 from app.audit import audit
 from app.channels.swisschat import (
     DEFAULT_API_BASE,
@@ -87,8 +88,6 @@ async def _handle_command(
         return (f"Workspace bleibt '{settings.default_workspace}' "
                 "(Multi-Workspace folgt).")
     if cmd in ("/approve", "/deny"):
-        if user.role not in ("admin", "superadmin"):
-            return "Nur Admins dürfen Freigaben erteilen."
         try:
             import uuid as _u
 
@@ -97,13 +96,16 @@ async def _handle_command(
             ap = None
         if not ap:
             return "Approval nicht gefunden."
-        ap.status = "approved" if cmd == "/approve" else "denied"
-        ap.approved_by = user.id
-        db.commit()
-        audit(db, action=f"approval.{ap.status}", user_id=user.id,
-              risk_level="high", details={"approval": str(ap.id),
-                                          "channel": "swisschat"})
-        return f"Approval {arg} → {ap.status}"
+        totp = parts[2] if len(parts) > 2 else None
+        res = finalize_approval(db, ap, user, approve=(cmd == "/approve"),
+                                totp_code=totp)
+        if res.get("status") == "totp_required":
+            return ("TOTP-Bestätigung nötig: /approve <id> <totp-code>")
+        if "result" in res:
+            r = res["result"]
+            return (f"Approval {arg} → {res['status']} "
+                    f"(exit {r['exit_code']})\n{(r['stdout'] or r['stderr'])[:600]}")
+        return f"Approval {arg} → {res.get('status')} {res.get('detail','')}"
     return None
 
 
