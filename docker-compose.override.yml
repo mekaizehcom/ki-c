@@ -1,0 +1,35 @@
+# Local development overrides (auto-merged by `docker compose up`).
+# - source mounted for reload
+# - API and web debug ports exposed directly
+# - self-signed TLS, dev nginx conf
+services:
+  tessa-api:
+    build:
+      context: ./services/api
+      target: dev
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./services/api/app:/srv/app
+      - ./services/api/migrations:/srv/migrations
+      - ./workspaces:/workspaces:ro
+    ports:
+      - "8000:8000"
+
+  tessa-web:
+    build:
+      context: ./services/web
+      target: dev
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+    volumes:
+      - ./services/web/src:/srv/src
+      - ./services/web/static:/srv/static
+    ports:
+      - "5173:3000"
+
+  worker:
+    build:
+      context: ./services/worker
+      target: dev
+    command: ["python", "-m", "worker.main"]
+    volumes:
+      - ./services/worker/worker:/srv/worker

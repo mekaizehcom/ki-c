@@ -1,0 +1,18 @@
+# Optional: run the production stack as a systemd unit.
+# Install: sudo cp infra/systemd/tessa.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now tessa
+[Unit]
+Description=Tessa AI agent platform (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/tessa
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

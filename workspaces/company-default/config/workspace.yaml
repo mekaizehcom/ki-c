@@ -1,0 +1,25 @@
+slug: company-default
+name: Company Default
+version: 1
+
+default_agent: main
+
+steering_files:
+  soul: SOUL.md
+  agents: AGENTS.md
+  tools: TOOLS.md
+  policies: POLICIES.md
+  memory: MEMORY.md
+  models: MODELS.md
+  routing: ROUTING.md
+  vector: VECTOR.md
+  approvals: APPROVALS.md
+
+skills_dir: skills
+
+autonomy:
+  default: approve_required
+
+vector:
+  collection: tessa_company_default
+  embedding_dim: 1536

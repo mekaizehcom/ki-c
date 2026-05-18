@@ -1,0 +1,119 @@
+# Base stack. Compose automatically merges docker-compose.override.yml (dev).
+# For production:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+name: tessa
+
+services:
+  tessa-api:
+    build: ./services/api
+    container_name: tessa-api
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      TESSA_WORKSPACES_DIR: /workspaces
+    volumes:
+      - ./workspaces:/workspaces:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    networks: [tessa-internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else sys.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  tessa-web:
+    build: ./services/web
+    container_name: tessa-web
+    restart: unless-stopped
+    environment:
+      ORIGIN: ${PUBLIC_BASE_URL:-http://localhost}
+      API_INTERNAL_URL: http://tessa-api:8000
+    depends_on:
+      - tessa-api
+    networks: [tessa-internal]
+
+  worker:
+    build: ./services/worker
+    container_name: tessa-worker
+    restart: unless-stopped
+    env_file: [.env]
+    volumes:
+      - ./workspaces:/workspaces:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    networks: [tessa-internal]
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: tessa-litellm
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml:ro
+    networks: [tessa-internal]
+
+  postgres:
+    image: postgres:16
+    container_name: tessa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [tessa-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: tessa-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [tessa-internal]
+
+  redis:
+    image: redis:7
+    container_name: tessa-redis
+    restart: unless-stopped
+    networks: [tessa-internal]
+
+  nginx:
+    image: nginx:latest
+    container_name: tessa-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs:/etc/tessa/certs:ro
+    depends_on:
+      - tessa-web
+      - tessa-api
+    networks: [tessa-internal]
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
+networks:
+  tessa-internal:
+    driver: bridge

@@ -1,0 +1,48 @@
+# LiteLLM proxy configuration.
+# Provider keys come from environment (.env) OR are injected at runtime by
+# the Tessa API admin layer. Models with empty keys simply stay unavailable;
+# the `mock-echo` model always works for local development without keys.
+
+model_list:
+  # ---- Mock (no key required) ----
+  - model_name: mock-echo
+    litellm_params:
+      model: gpt-3.5-turbo
+      mock_response: "Tessa mock model: integrations are not yet configured. Add a provider key in the Admin panel."
+
+  # ---- OpenAI ----
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ---- Anthropic ----
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---- DeepSeek ----
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-reasoner
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
