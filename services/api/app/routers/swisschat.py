@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
+import traceback
 
 import httpx
+
+logger = logging.getLogger("tessa.swisschat")
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -110,65 +114,90 @@ async def _handle_command(
 
 
 async def _process(raw_event: dict) -> None:
+    print(f"[swisschat] event keys={sorted(raw_event)} type={raw_event.get('type')!r} "
+          f"conv={raw_event.get('conversation_id')!r} "
+          f"sender={raw_event.get('sender_user_id')!r} "
+          f"msg_id={raw_event.get('message_id')!r}", flush=True)
     db = SessionLocal()
     try:
-        creds = get_credentials(db, SWISSCHAT)
-        if not creds:
-            return
-        if raw_event.get("type") != "message":
-            return
-        msg_id = raw_event.get("message_id", "")
-        sender = raw_event.get("sender_user_id", "")
-        sc_conv = raw_event.get("conversation_id", "")
-        text = (raw_event.get("plaintext") or "").strip()
-        if sender == creds.get("bot_user_id"):
-            return
-        if msg_id and seen_once(f"swisschat:seen:{msg_id}"):
-            return
-
-        api_base = creds.get("api_base", DEFAULT_API_BASE)
-        token = creds.get("service_token", "")
-
-        async def reply(t: str) -> None:
-            await send_message(api_base, token, sc_conv, t,
-                               client_message_id=f"tessa-{msg_id}")
-
-        acc = db.scalar(
-            select(SwisschatAccount).where(
-                SwisschatAccount.swisschat_user_id == sender
-            )
-        )
-        if not acc:
-            acc = SwisschatAccount(swisschat_user_id=sender,
-                                   link_code=_new_code(), linked=False)
-            db.add(acc)
-            db.commit()
-        if not acc.linked or not acc.user_id:
-            await reply(
-                "Dieses SwissChat-Konto ist noch nicht mit Tessa verknüpft.\n"
-                f"Öffne {settings.public_base_url}/settings, melde dich an "
-                f"und gib diesen Code ein: {acc.link_code}"
-            )
-            return
-
-        user = db.get(User, acc.user_id)
-        if not user or user.status != "active":
-            await reply("Verknüpftes Tessa-Konto ist inaktiv.")
-            return
-
-        conv = _conv_for(db, user, sc_conv)
-        if text.startswith("/"):
-            out = await _handle_command(db, user, conv, text)
-            await reply(out or "Unbekannter Befehl. /help für Hilfe.")
-            return
-        if not text:
-            return
-        answer, _model, _src = await generate_reply(
-            db, user, conv, text, settings.default_workspace
-        )
-        await reply(answer)
+        await _process_inner(db, raw_event)
+    except Exception:
+        print("[swisschat] _process crashed:\n" + traceback.format_exc(), flush=True)
     finally:
         db.close()
+
+
+async def _process_inner(db, raw_event: dict) -> None:
+    creds = get_credentials(db, SWISSCHAT)
+    if not creds:
+        print("[swisschat] no creds, ignoring", flush=True)
+        return
+    if raw_event.get("type") != "message":
+        print(f"[swisschat] non-message event {raw_event.get('type')!r} ignored",
+              flush=True)
+        return
+    msg_id = raw_event.get("message_id") or ""
+    sender = raw_event.get("sender_user_id") or ""
+    sc_conv = raw_event.get("conversation_id") or ""
+    text = (raw_event.get("plaintext") or "").strip()
+    if not sender or not sc_conv:
+        print(f"[swisschat] missing sender/conv (sender={sender!r}, "
+              f"conv={sc_conv!r}) -- skipping", flush=True)
+        return
+    if sender == creds.get("bot_user_id"):
+        print("[swisschat] self-echo skipped", flush=True)
+        return
+    if msg_id and seen_once(f"swisschat:seen:{msg_id}"):
+        print(f"[swisschat] duplicate msg_id={msg_id} skipped", flush=True)
+        return
+
+    api_base = creds.get("api_base", DEFAULT_API_BASE)
+    token = creds.get("service_token", "")
+
+    async def reply(t: str) -> None:
+        ok, detail = await send_message(api_base, token, sc_conv, t,
+                                        client_message_id=f"tessa-{msg_id}")
+        if not ok:
+            print(f"[swisschat] send_message FAILED: {detail}", flush=True)
+        else:
+            print(f"[swisschat] sent reply ({len(t)} chars)", flush=True)
+
+    acc = db.scalar(
+        select(SwisschatAccount).where(
+            SwisschatAccount.swisschat_user_id == sender
+        )
+    )
+    if not acc:
+        acc = SwisschatAccount(swisschat_user_id=sender,
+                               link_code=_new_code(), linked=False)
+        db.add(acc)
+        db.commit()
+        print(f"[swisschat] new SwisschatAccount for {sender!r}, "
+              f"link_code={acc.link_code}", flush=True)
+    if not acc.linked or not acc.user_id:
+        await reply(
+            "Dieses SwissChat-Konto ist noch nicht mit Tessa verknüpft.\n"
+            f"Öffne {settings.public_base_url}/settings, melde dich an "
+            f"und gib diesen Code ein: {acc.link_code}"
+        )
+        return
+
+    user = db.get(User, acc.user_id)
+    if not user or user.status != "active":
+        await reply("Verknüpftes Tessa-Konto ist inaktiv.")
+        return
+
+    conv = _conv_for(db, user, sc_conv)
+    if text.startswith("/"):
+        out = await _handle_command(db, user, conv, text)
+        await reply(out or "Unbekannter Befehl. /help für Hilfe.")
+        return
+    if not text:
+        return
+    answer, _model, _src = await generate_reply(
+        db, user, conv, text, settings.default_workspace
+    )
+    await reply(answer)
 
 
 @router.post("/webhook/swisschat")
@@ -190,6 +219,9 @@ async def webhook(request: Request, bg: BackgroundTasks) -> dict:
         event = json.loads(raw)
     except Exception:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid JSON")
+    # log truncated raw body so we see what SwissChat actually sends
+    snippet = raw[:600].decode("utf-8", errors="replace")
+    print(f"[swisschat] webhook accepted ({len(raw)}B): {snippet}", flush=True)
     bg.add_task(_process, event)  # ack fast (<10s), process async
     return {"ok": True}
 
