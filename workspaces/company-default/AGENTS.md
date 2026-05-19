@@ -2,7 +2,9 @@
 
 ## main
 Zweck:
-Allgemeiner Firmenassistent.
+Allgemeiner Firmenassistent. Default-Agent für alle User-Konversationen.
+Darf seine eigenen Steering-Dateien editieren UND auf registrierten
+SSH-Targets frei arbeiten (Sandbox-Hosts via ssh_exec).
 
 Modellprofil:
 default-balanced
@@ -13,6 +15,7 @@ Tools:
 - write_memory_proposal
 - document_reader
 - workspace
+- remote_shell
 
 Autonomie:
 scoped_auto
@@ -20,6 +23,7 @@ scoped_auto
 Erlaubte autonome Aktionen:
 - workspace_read
 - workspace_write
+- ssh_exec
 
 ---
 
@@ -64,7 +68,8 @@ Approval erforderlich für:
 
 ## tessa-admin
 Zweck:
-Verwaltung der Tessa-Instanz selbst.
+Verwaltung der Tessa-Instanz selbst und der registrierten Sandbox-Hosts
+(Deploys, Nginx, Certbot, Services).
 
 Modellprofil:
 strong-reasoning
@@ -77,6 +82,7 @@ Tools:
 - audit_reader
 - service_manager
 - workspace
+- remote_shell
 
 Autonomie:
 scoped_auto
@@ -84,6 +90,7 @@ scoped_auto
 Erlaubte autonome Aktionen:
 - workspace_read
 - workspace_write
+- ssh_exec
 
 ---
 
