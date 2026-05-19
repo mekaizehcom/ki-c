@@ -731,6 +731,27 @@ async def ws_chat(ws: WebSocket) -> None:
                     await ws.send_json({"type": "done", "model": "system",
                                         "conversation_id": str(conv.id)})
                     continue
+
+                # If the agent has tools, run the full tool-use loop
+                # (no token streaming, but the tools actually fire).
+                tool_schemas = _build_tool_schemas(
+                    _agent_tools(db, ws_slug, agent_name)
+                )
+                if tool_schemas:
+                    await ws.send_json({"type": "meta",
+                                        "conversation_id": str(conv.id),
+                                        "agent": agent_name,
+                                        "sources": [],
+                                        "tools": True})
+                    final_text, used, sources = await generate_reply(
+                        db, user, conv, body.message, ws_slug
+                    )
+                    await ws.send_json({"type": "delta", "text": final_text})
+                    await ws.send_json({"type": "done", "model": used,
+                                        "conversation_id": str(conv.id)})
+                    continue
+
+                # Tool-less agent: classic streaming path.
                 db.add(Message(conversation_id=conv.id, role="user", content=body.message))
                 db.commit()
                 messages = [{"role": "system",
