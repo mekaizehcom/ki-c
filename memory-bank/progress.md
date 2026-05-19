@@ -24,7 +24,8 @@ Phase. 23 Unit-Tests laufen grün.
 | Memory Bank | ✅ | Cline-Stil, 6 Dateien + AGENT_BOOTSTRAP | `27ccce1` |
 | SOUL-Rewrite | ✅ | User-authored, opinionated identity | `098f75a` |
 | Agent Self-Edit | ✅ | `workspace_*` internal tools + chat tool-use loop | `a020acd` |
-| Slash-Commands | ✅ | `/help /status /models /agent` (REST + WS), Migration 0003 | (folgt) |
+| Slash-Commands | ✅ | `/help /status /models /agent` (REST + WS), Migration 0003 | `9115611` |
+| Sandbox SSH | ✅ | `ssh_exec` remote_shell tool, Admin-UI für Host-Config, TOFU-Verifikation | (folgt) |
 
 ## Was nachweislich funktioniert (E2E geprüft)
 

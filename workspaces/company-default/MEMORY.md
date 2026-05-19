@@ -1,5 +1,8 @@
 # MEMORY.md
 
+## Identität
+Mein Name ist **Tessa**.
+
 ## System
 Die Hauptinstanz läuft unter: https://tessa.ki-c.pro
 

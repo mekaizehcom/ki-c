@@ -156,11 +156,13 @@ Script läuft + Output offsite (S3 o.ä.).
 
 ## Bekannte Constraints
 
-- **Host-Befehle wie `systemctl`/`docker`/`nginx` sind aus dem API-
-  Container heraus nicht erreichbar.** Die Tools-Registry + Approval-
-  Pipeline ist vollständig — aber die Execution würde `exit 127 not
-  available here` melden. Lösung: dedizierter Host-Exec-Backend
-  (z.B. SSH-Agent zu localhost mit eigenem Schlüssel + Whitelist).
-  Bewusste v1-Limitation, dokumentiert in `docs/security.md`.
+- **Lokale Host-Befehle bleiben gesperrt.** `systemctl`/`docker`/`nginx`
+  auf dem Tessa-Host selbst sind aus dem API-Container nicht erreichbar
+  — Absicht. Für produktive Server-Aktionen gibt es den separaten
+  **Sandbox-Host** und das `ssh_exec`-Tool. Setup über Admin-UI →
+  "Sandbox host (SSH target)" (Host, User, Port, PEM Private Key,
+  Save & Test). Credentials Fernet-verschlüsselt in
+  `integration_credentials["sandbox_host"]`. `known_hosts` persistiert
+  im benannten Volume `ssh_state`.
 - Pydantic v2 — wenn ältere Beispiele auftauchen, auf `model_config =
   ConfigDict(...)` umstellen (kein `class Config` mehr).

@@ -102,7 +102,35 @@ def workspace_write(payload: dict, ctx: dict[str, Any]) -> dict:
     }
 
 
+def ssh_exec(payload: dict, ctx: dict[str, Any]) -> dict:
+    """payload: {command, cwd?, timeout?}
+
+    Free-form shell on the configured sandbox host. Localhost is
+    OFF-LIMITS — this tool only ever talks to the host configured in
+    integration_credentials["sandbox_host"]. Returns the SSH result dict.
+    """
+    from app.channels.ssh import DEFAULT_TIMEOUT, run as ssh_run
+    from app.db import SessionLocal
+
+    command = (payload.get("command") or "").strip()
+    if not command:
+        raise ValueError("command is required")
+    cwd = payload.get("cwd") or None
+    try:
+        timeout = int(payload.get("timeout") or DEFAULT_TIMEOUT)
+    except (TypeError, ValueError):
+        raise ValueError("timeout must be an integer (seconds)")
+    timeout = max(5, min(600, timeout))
+
+    db = SessionLocal()
+    try:
+        return ssh_run(db, command, cwd=cwd, timeout=timeout)
+    finally:
+        db.close()
+
+
 INTERNAL_ACTIONS = {
     "workspace_read": workspace_read,
     "workspace_write": workspace_write,
+    "ssh_exec": ssh_exec,
 }

@@ -16,6 +16,13 @@
   let pairCode = "";
   let pairBot = "tessa";
   let pairBusy = false;
+  let sandbox: any = null;
+  let sbHost = "";
+  let sbUser = "ubuntu";
+  let sbPort = 22;
+  let sbKey = "";
+  let sbBusy = false;
+  let sbTestResult = "";
 
   onMount(async () => {
     try {
@@ -33,11 +40,51 @@
   });
 
   async function refresh() {
-    [sys, providers, agents, users, audit, swisschat] = await Promise.all([
+    [sys, providers, agents, users, audit, swisschat, sandbox] = await Promise.all([
       api.adminSystem(), api.adminProviders(), api.adminAgents(),
       api.adminUsers(), api.adminAudit(),
       api.swisschatStatus().catch(() => ({ configured: false })),
+      api.sandboxStatus().catch(() => ({ configured: false })),
     ]);
+  }
+
+  async function saveSandbox() {
+    msg = ""; sbTestResult = ""; sbBusy = true;
+    try {
+      await api.sandboxConfigure({
+        host: sbHost.trim(), user: sbUser.trim() || "ubuntu",
+        port: Number(sbPort) || 22, private_key: sbKey,
+      });
+      sbKey = "";
+      msg = "Sandbox host saved. Running connection test…";
+      const r = await api.sandboxTest();
+      sbTestResult = `exit ${r.exit_code} @ ${r.host || "?"}\n` +
+                     ((r.stdout || "").trim() + "\n" + (r.stderr || "").trim());
+      msg = r.exit_code === 0 ? "Sandbox connection OK." : "Sandbox saved, test failed (see below).";
+      await refresh();
+    } catch (e: any) {
+      msg = `Sandbox save failed: ${e.message}`;
+    } finally { sbBusy = false; }
+  }
+
+  async function testSandbox() {
+    sbTestResult = ""; sbBusy = true;
+    try {
+      const r = await api.sandboxTest();
+      sbTestResult = `exit ${r.exit_code} @ ${r.host || "?"}\n` +
+                     ((r.stdout || "").trim() + "\n" + (r.stderr || "").trim());
+    } catch (e: any) { sbTestResult = e.message; }
+    finally { sbBusy = false; }
+  }
+
+  async function forgetSandbox() {
+    if (!confirm("Forget sandbox credentials? Tessa loses the ability to run ssh_exec.")) return;
+    msg = ""; sbTestResult = "";
+    try {
+      await api.sandboxForget();
+      msg = "Sandbox credentials forgotten.";
+      await refresh();
+    } catch (e: any) { msg = e.message; }
   }
 
   async function pairSwisschat() {
@@ -154,6 +201,43 @@
       <p class="muted" style="font-size:0.78rem;">
         Keys are stored Fernet-encrypted and passed to the gateway per request.
       </p>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem;">
+      <h3 style="margin-top:0;">Sandbox host (SSH target)</h3>
+      <p class="muted" style="font-size:0.85rem;margin-top:0;">
+        Tessa's <b>devops</b> agent runs free-form shell here (deploy,
+        nginx, certbot, apt). This is intentionally separate from the
+        Tessa host. (Superadmin only.)
+      </p>
+      {#if sandbox?.configured}
+        <div class="muted" style="font-size:0.85rem;margin-bottom:0.6rem;">
+          {sandbox.user}@<b>{sandbox.host}</b>:{sandbox.port}
+          {#if sandbox.fingerprint}· fp: <code>{sandbox.fingerprint}</code>{/if}
+        </div>
+        <div style="display:flex;gap:0.5rem;">
+          <button on:click={testSandbox} disabled={sbBusy}>Test connection</button>
+          <button on:click={forgetSandbox} style="background:#b91c1c;">Forget</button>
+        </div>
+      {:else}
+        <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;">
+          <input bind:value={sbHost} placeholder="host or IP" style="flex:2;" />
+          <input bind:value={sbUser} placeholder="user" style="flex:1;" />
+          <input bind:value={sbPort} placeholder="22" style="width:80px;" inputmode="numeric" />
+        </div>
+        <textarea bind:value={sbKey} placeholder="Paste the private key (PEM, starts with -----BEGIN ... PRIVATE KEY-----)"
+                  rows="6"
+                  style="width:100%;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem;font-family:ui-monospace,monospace;font-size:0.78rem;"></textarea>
+        <div style="margin-top:0.5rem;">
+          <button on:click={saveSandbox}
+                  disabled={sbBusy || !sbHost.trim() || !sbKey.trim()}>
+            {sbBusy ? "Saving…" : "Save & test"}
+          </button>
+        </div>
+      {/if}
+      {#if sbTestResult}
+        <pre style="white-space:pre-wrap;background:#0d1117;padding:0.6rem;border-radius:6px;margin-top:0.8rem;font-size:0.78rem;max-height:200px;overflow:auto;">{sbTestResult}</pre>
+      {/if}
     </div>
 
     <div class="card" style="margin-bottom:1rem;">

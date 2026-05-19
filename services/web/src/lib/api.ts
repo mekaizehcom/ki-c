@@ -69,6 +69,11 @@ export const api = {
     }),
   deny: (id: string) =>
     request<any>(`/approvals/${id}/deny`, { method: "POST" }),
+  sandboxStatus: () => request<any>("/admin/sandbox"),
+  sandboxConfigure: (b: { host: string; user: string; port: number; private_key: string }) =>
+    request<any>("/admin/sandbox", { method: "PUT", body: JSON.stringify(b) }),
+  sandboxTest: () => request<any>("/admin/sandbox/test", { method: "POST" }),
+  sandboxForget: () => request<any>("/admin/sandbox", { method: "DELETE" }),
   swisschatStatus: () => request<any>("/admin/swisschat"),
   swisschatPair: (pairing_code: string, bot_username = "tessa") =>
     request<any>("/admin/swisschat/pair", {

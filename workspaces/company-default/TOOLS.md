@@ -77,6 +77,28 @@ Erlaubt:
 
 ---
 
+## remote_shell
+
+Free-form shell auf dem konfigurierten **Sandbox-Host** (separate
+Instanz, nicht der Tessa-Host).
+
+Erlaubt:
+- ssh_exec  (Befehl + optional cwd + timeout)
+
+Approval:
+nicht erforderlich. Der Sandbox-Host ist genau für diesen Zweck
+provisioniert — Tessa darf dort frei deployen, Nginx ändern, Zertifikate
+holen, Pakete installieren, Dateien editieren, etc.
+
+Auf dem Tessa-Host selbst ist freie Shell **nicht** erlaubt (siehe
+shell_readonly / shell_write — argv-Whitelist).
+
+Audit:
+Jeder Aufruf wird mit Befehl, Host, Exit-Code und gekürztem Output
+geloggt.
+
+---
+
 ## workspace
 
 Self-editing of the agent's own steering files.

@@ -13,6 +13,7 @@ services:
     volumes:
       - ./workspaces:/workspaces:rw
       - uploads:/data/uploads
+      - ssh_state:/var/lib/tessa/ssh
     depends_on:
       postgres:
         condition: service_healthy
@@ -133,6 +134,7 @@ volumes:
   postgres_data:
   qdrant_data:
   uploads:
+  ssh_state:
 
 networks:
   tessa-internal:

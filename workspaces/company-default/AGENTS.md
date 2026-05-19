@@ -25,7 +25,9 @@ Erlaubte autonome Aktionen:
 
 ## devops
 Zweck:
-Verwaltung und Analyse der Ubuntu-Serverumgebung.
+Verwaltung und Analyse der Ubuntu-Serverumgebung. Productive actions
+(deployments, nginx, certbot, apt) target the **sandbox host** over SSH,
+not the Tessa host itself.
 
 Modellprofil:
 strong-reasoning
@@ -38,9 +40,16 @@ Tools:
 - systemd
 - logs
 - file_editor
+- remote_shell
+- workspace
 
 Autonomie:
-admin-configurable
+scoped_auto
+
+Erlaubte autonome Aktionen:
+- ssh_exec
+- workspace_read
+- workspace_write
 
 Approval erforderlich für:
 - Neustart von Diensten

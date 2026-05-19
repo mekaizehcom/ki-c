@@ -114,6 +114,29 @@ REGISTRY: dict[str, Command] = {
             },
         },
     ),
+    # ---- remote shell on the sandbox host (free-form, contained blast radius) ----
+    "ssh_exec": Command(
+        "ssh_exec", [], "remote_shell", "medium", False,
+        "Run an arbitrary shell command on the configured sandbox host "
+        "(NOT this Tessa host). Use for deployments, nginx, certbot, "
+        "package installs, file edits, etc. payload: "
+        "{command, cwd?, timeout?}. Every call is audited.",
+        internal="ssh_exec",
+        payload_schema={
+            "type": "object",
+            "required": ["command"],
+            "properties": {
+                "command": {"type": "string",
+                            "description": "Shell command to run remotely. "
+                                           "Passed to the remote shell as-is; "
+                                           "quote arguments yourself."},
+                "cwd": {"type": "string",
+                        "description": "Optional remote working directory."},
+                "timeout": {"type": "integer", "minimum": 5, "maximum": 600,
+                            "description": "Seconds; default 60."},
+            },
+        },
+    ),
 }
 
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}

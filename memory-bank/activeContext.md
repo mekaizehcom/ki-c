@@ -21,7 +21,31 @@ Die noch laufende Aufgabe für den Endnutzer ist die **User-Verlinkung**:
 
 ## Letzte Entscheidungen (jüngste zuerst)
 
-1. **Deterministische Slash-Commands im Chat** (Migration 0003).
+1. **Sandbox-Host für freie Shell-Aktionen.** Neue zweite Instanz vom
+   User provisioniert, separater SSH-Key. Tessa-Host bleibt locked-down,
+   alle produktiven Aktionen (Deploy, Nginx, Certbot, apt) laufen über
+   SSH gegen den Sandbox-Host.
+   - Neues `remote_shell` Tool `ssh_exec` (in-process internal action)
+     — free-form Shell, kein argv-Whitelist. payload:
+     `{command, cwd?, timeout?}`. Audit erfasst command, host, exit_code,
+     stdout/stderr-tail.
+   - Credentials in `integration_credentials["sandbox_host"]`:
+     public `{host, user, port, fingerprint}`, encrypted `{private_key}`.
+   - Host-key-Verifikation: TOFU on first connect → Fingerprint wird in
+     der public-blob gespeichert; subsequente Calls verifizieren strikt
+     gegen `/var/lib/tessa/ssh/known_hosts` (persistiertes Volume
+     `ssh_state`).
+   - `openssh-client` ist im API-Image. Private Key wird pro Call in
+     ein 0600-Tempfile geschrieben und nach dem Call gelöscht.
+   - Admin-UI: Sektion "Sandbox host (SSH target)" — host/user/port
+     + Key paste (PEM), Save & test, Test connection, Forget.
+   - `devops` agent hat `remote_shell` + `workspace` Tools,
+     `Autonomie: scoped_auto`, Whitelist
+     `[ssh_exec, workspace_read, workspace_write]`. Andere Agents
+     bekommen `remote_shell` nicht.
+   - Parser-Gotcha: Labels in AGENTS.md dürfen keine Klammern enthalten
+     (Regex `^[A-Za-zÄÖÜäöü ]+:`).
+2. **Deterministische Slash-Commands im Chat** (Migration 0003).
    `_try_command()` läuft VOR jedem Modell-Aufruf in REST und WS:
    - `/help` — Liste aller Commands.
    - `/models` — verfügbare Modelle (gefiltert nach konfigurierten

@@ -79,6 +79,14 @@ def execute(
                 details["file"] = result["result"].get("file")
                 details["reason"] = result["result"].get("reason")
                 details["diff"] = result["result"].get("diff", "")[:4000]
+            if body.command == "ssh_exec":
+                payload = body.payload or {}
+                details["remote_command"] = (payload.get("command") or "")[:1000]
+                details["cwd"] = payload.get("cwd")
+                if "result" in result:
+                    details["host"] = result["result"].get("host")
+                    details["stdout_tail"] = (result["result"].get("stdout") or "")[-600:]
+                    details["stderr_tail"] = (result["result"].get("stderr") or "")[-400:]
             audit(db, action="tool.executed", user_id=user.id,
                   agent_id=body.agent, risk_level=d.risk,
                   status="success" if result["exit_code"] == 0 else "failed",

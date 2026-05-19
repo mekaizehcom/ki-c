@@ -471,6 +471,13 @@ def _run_tool_in_chat(
             details["file"] = result["result"].get("file")
             details["reason"] = result["result"].get("reason")
             details["diff"] = (result["result"].get("diff") or "")[:4000]
+        if cmd_name == "ssh_exec":
+            details["remote_command"] = (args.get("command") or "")[:1000]
+            details["cwd"] = args.get("cwd")
+            if "result" in result:
+                details["host"] = result["result"].get("host")
+                details["stdout_tail"] = (result["result"].get("stdout") or "")[-600:]
+                details["stderr_tail"] = (result["result"].get("stderr") or "")[-400:]
         audit(db, action="tool.executed", user_id=user.id, agent_id=agent_name,
               risk_level=d.risk,
               status="success" if result["exit_code"] == 0 else "failed",
