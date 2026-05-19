@@ -103,15 +103,18 @@ def workspace_write(payload: dict, ctx: dict[str, Any]) -> dict:
 
 
 def ssh_exec(payload: dict, ctx: dict[str, Any]) -> dict:
-    """payload: {command, cwd?, timeout?}
+    """payload: {label, command, cwd?, timeout?}
 
-    Free-form shell on the configured sandbox host. Localhost is
-    OFF-LIMITS — this tool only ever talks to the host configured in
-    integration_credentials["sandbox_host"]. Returns the SSH result dict.
+    Free-form shell on the host registered under `label` in the
+    ssh_hosts table. Localhost is OFF-LIMITS — this tool never targets
+    the Tessa host itself.
     """
     from app.channels.ssh import DEFAULT_TIMEOUT, run as ssh_run
     from app.db import SessionLocal
 
+    label = (payload.get("label") or "").strip()
+    if not label:
+        raise ValueError("label is required (which host to target)")
     command = (payload.get("command") or "").strip()
     if not command:
         raise ValueError("command is required")
@@ -124,7 +127,7 @@ def ssh_exec(payload: dict, ctx: dict[str, Any]) -> dict:
 
     db = SessionLocal()
     try:
-        return ssh_run(db, command, cwd=cwd, timeout=timeout)
+        return ssh_run(db, label, command, cwd=cwd, timeout=timeout)
     finally:
         db.close()
 

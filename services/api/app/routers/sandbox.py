@@ -1,7 +1,7 @@
-"""Admin endpoints for the sandbox-host SSH configuration."""
+"""Admin endpoints for SSH execution targets (labeled multi-host)."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -13,60 +13,81 @@ from app.models import User
 router = APIRouter(prefix="/api/admin/sandbox", tags=["sandbox"])
 
 
-class SandboxConfig(BaseModel):
-    host: str
+class SshHostIn(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
     user: str = "ubuntu"
     port: int = 22
     private_key: str  # PEM, only stored encrypted; never returned
+    description: str = ""
 
 
-@router.get("")
-def status_(
+@router.get("/hosts")
+def list_hosts(
+    _: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return ssh_channel.list_hosts(db)
+
+
+@router.get("/hosts/{label}")
+def get_host(
+    label: str,
     _: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ) -> dict:
-    return ssh_channel.public_info(db)
+    h = ssh_channel.get_host(db, label)
+    if not h:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    return h
 
 
-@router.put("")
-def configure(
-    body: SandboxConfig,
+@router.put("/hosts/{label}")
+def upsert_host(
+    label: str,
+    body: SshHostIn,
     admin: User = Depends(require_role("superadmin")),
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        public = ssh_channel.configure(
-            db, host=body.host, user=body.user, port=body.port,
-            private_key=body.private_key,
+        public = ssh_channel.upsert_host(
+            db, label=label, host=body.host, user=body.user, port=body.port,
+            private_key=body.private_key, description=body.description,
+            created_by=admin.id,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-    audit(db, action="sandbox.configured", risk_level="critical",
+    audit(db, action="sandbox.host_upserted", risk_level="critical",
           user_id=admin.id,
-          details={"host": body.host, "user": body.user, "port": body.port})
+          details={"label": public["label"], "host": public["host"],
+                   "user": public["user"], "port": public["port"]})
     return public
 
 
-@router.post("/test")
-def test(
+@router.post("/hosts/{label}/test")
+def test_host(
+    label: str,
     admin: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ) -> dict:
-    r = ssh_channel.test_connection(db)
-    audit(db, action="sandbox.tested", user_id=admin.id,
+    r = ssh_channel.test_connection(db, label)
+    audit(db, action="sandbox.host_tested", user_id=admin.id,
           risk_level="low",
           status="success" if r["exit_code"] == 0 else "failed",
-          details={"exit_code": r["exit_code"],
+          details={"label": r.get("label") or label,
+                   "exit_code": r["exit_code"],
                    "host": r.get("host"),
                    "stderr_tail": (r.get("stderr") or "")[-300:]})
     return r
 
 
-@router.delete("")
-def forget(
+@router.delete("/hosts/{label}")
+def forget_host(
+    label: str,
     admin: User = Depends(require_role("superadmin")),
     db: Session = Depends(get_db),
 ) -> dict:
-    ssh_channel.forget(db)
-    audit(db, action="sandbox.forgotten", risk_level="high", user_id=admin.id)
-    return {"status": "forgotten"}
+    if not ssh_channel.forget_host(db, label):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    audit(db, action="sandbox.host_forgotten", risk_level="high",
+          user_id=admin.id, details={"label": label})
+    return {"status": "forgotten", "label": label}

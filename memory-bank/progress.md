@@ -25,7 +25,8 @@ Phase. 23 Unit-Tests laufen grün.
 | SOUL-Rewrite | ✅ | User-authored, opinionated identity | `098f75a` |
 | Agent Self-Edit | ✅ | `workspace_*` internal tools + chat tool-use loop | `a020acd` |
 | Slash-Commands | ✅ | `/help /status /models /agent` (REST + WS), Migration 0003 | `9115611` |
-| Sandbox SSH | ✅ | `ssh_exec` remote_shell tool, Admin-UI für Host-Config, TOFU-Verifikation | (folgt) |
+| Sandbox SSH | ✅ | `ssh_exec` remote_shell tool, Admin-UI für Host-Config, TOFU-Verifikation | `e32e06d` |
+| Multi-Host SSH | ✅ | Tabelle `ssh_hosts`, gelabelte Targets, Migration 0004, Admin-Liste mit per-Host Test/Forget | (folgt) |
 
 ## Was nachweislich funktioniert (E2E geprüft)
 

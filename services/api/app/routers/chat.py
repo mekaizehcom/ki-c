@@ -41,12 +41,30 @@ class ChatRequest(BaseModel):
     agent: str | None = None
 
 
-def _system_prompt(ws_slug: str, agent_name: str) -> str:
+def _system_prompt(ws_slug: str, agent_name: str, db: Session | None = None) -> str:
     ws = load_workspace(ws_slug)
     agent = ws.agents.get(agent_name)
     parts = [ws.soul.strip()]
     if agent and agent.purpose:
         parts.append(f"\n# Agent: {agent_name}\n{agent.purpose}")
+    # If this agent can call ssh_exec, list the registered hosts so the
+    # model knows what `label` values are valid.
+    if agent and "remote_shell" in (agent.tools or []) and db is not None:
+        from app.models import SshHost
+
+        rows = list(db.scalars(
+            select(SshHost).where(SshHost.enabled == True)  # noqa: E712
+            .order_by(SshHost.label)
+        ))
+        if rows:
+            lines = ["", "# Available SSH hosts (use the `label` field in ssh_exec):"]
+            for r in rows:
+                desc = f" — {r.description}" if r.description else ""
+                lines.append(f"- {r.label}  ({r.username}@{r.host}:{r.port}){desc}")
+            parts.append("\n".join(lines))
+        else:
+            parts.append("\n# Available SSH hosts: none registered. "
+                         "Tell the user to add one in /admin → Sandbox.")
     return "\n".join(p for p in parts if p).strip()
 
 
@@ -472,6 +490,7 @@ def _run_tool_in_chat(
             details["reason"] = result["result"].get("reason")
             details["diff"] = (result["result"].get("diff") or "")[:4000]
         if cmd_name == "ssh_exec":
+            details["label"] = args.get("label")
             details["remote_command"] = (args.get("command") or "")[:1000]
             details["cwd"] = args.get("cwd")
             if "result" in result:
@@ -520,7 +539,7 @@ async def generate_reply(
     db.add(Message(conversation_id=conv.id, role="user", content=message))
     db.commit()
 
-    messages = [{"role": "system", "content": _system_prompt(ws_slug, agent_name)}]
+    messages = [{"role": "system", "content": _system_prompt(ws_slug, agent_name, db)}]
     ctx, sources = _retrieval(user, ws_slug, message)
     if ctx:
         messages.append({"role": "system", "content": ctx})
@@ -715,7 +734,7 @@ async def ws_chat(ws: WebSocket) -> None:
                 db.add(Message(conversation_id=conv.id, role="user", content=body.message))
                 db.commit()
                 messages = [{"role": "system",
-                             "content": _system_prompt(ws_slug, agent_name)}]
+                             "content": _system_prompt(ws_slug, agent_name, db)}]
                 ctx, sources = _retrieval(user, ws_slug, body.message)
                 if ctx:
                     messages.append({"role": "system", "content": ctx})

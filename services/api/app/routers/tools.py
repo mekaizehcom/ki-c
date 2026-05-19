@@ -81,6 +81,7 @@ def execute(
                 details["diff"] = result["result"].get("diff", "")[:4000]
             if body.command == "ssh_exec":
                 payload = body.payload or {}
+                details["label"] = payload.get("label")
                 details["remote_command"] = (payload.get("command") or "")[:1000]
                 details["cwd"] = payload.get("cwd")
                 if "result" in result:

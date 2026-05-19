@@ -1,114 +1,178 @@
-"""SSH client for the sandbox execution host.
+"""SSH client for the multi-host sandbox.
 
 Tessa's brain runs on the base host (locked down, registry-whitelisted
 tools only). For productive work — deployments, nginx, certbot — the
-agent reaches out to a SEPARATE host over SSH. That host is the
-"sandbox" where free-form shell is acceptable. This module is the only
-place that opens those connections.
+agent reaches out to SEPARATE hosts over SSH. Each host is registered
+under a unique `label` (e.g. "staging", "prod-eu1") so the agent can
+pick by name. Free-form shell is intentional on those hosts.
 
-Credentials live in integration_credentials["sandbox_host"]:
-  public:  {host, user, port, fingerprint}
-  encrypted: {private_key}
+Storage: `ssh_hosts` table. Private keys Fernet-encrypted via
+app.security.encrypt/decrypt.
 
 Host key verification: TOFU on first connect (auto-accept, store
-fingerprint), strict-verify after. The known_hosts file lives on a
-persistent volume at /var/lib/tessa/ssh/known_hosts.
+fingerprint), strict-verify after. The known_hosts file lives on the
+persistent volume at /var/lib/tessa/ssh/known_hosts and is shared
+across all hosts (one file, multiple entries keyed by host+port).
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.integrations import get_credentials, get_public, save_credentials
+from app.models import SshHost
+from app.security import decrypt, encrypt
 
-SANDBOX = "sandbox_host"
 SSH_STATE_DIR = "/var/lib/tessa/ssh"
 KNOWN_HOSTS = os.path.join(SSH_STATE_DIR, "known_hosts")
 DEFAULT_TIMEOUT = 60
 
+LABEL_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
+RESERVED_LABELS = {"localhost", "local", "tessa", "self"}
 
-# ---- public configure / status ----
 
-def configure(
-    db: Session, *, host: str, user: str, port: int, private_key: str,
+def _validate_label(label: str) -> str:
+    label = (label or "").strip().lower()
+    if not LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "label must be 1-41 chars, lowercase letters/digits/_/-, "
+            "starting with a letter or digit"
+        )
+    if label in RESERVED_LABELS:
+        raise ValueError(f"label '{label}' is reserved")
+    return label
+
+
+def _to_public(row: SshHost) -> dict:
+    return {
+        "label": row.label,
+        "host": row.host,
+        "user": row.username,
+        "port": row.port,
+        "description": row.description or "",
+        "enabled": row.enabled,
+        "fingerprint": row.fingerprint,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+# ---- public CRUD ----
+
+def list_hosts(db: Session) -> list[dict]:
+    rows = db.scalars(select(SshHost).order_by(SshHost.label))
+    return [_to_public(r) for r in rows]
+
+
+def get_host(db: Session, label: str) -> dict | None:
+    row = db.get(SshHost, label.strip().lower())
+    return _to_public(row) if row else None
+
+
+def upsert_host(
+    db: Session,
+    *,
+    label: str,
+    host: str,
+    user: str = "ubuntu",
+    port: int = 22,
+    private_key: str,
+    description: str = "",
+    created_by=None,
 ) -> dict:
-    """Save sandbox credentials. Does NOT test the connection — call
-    test_connection() separately so the admin sees the result."""
+    label = _validate_label(label)
     host = (host or "").strip()
-    user = (user or "").strip()
-    if not host or not user:
-        raise ValueError("host and user are required")
-    if not 1 <= port <= 65535:
+    user = (user or "ubuntu").strip()
+    if not host:
+        raise ValueError("host is required")
+    if not 1 <= int(port) <= 65535:
         raise ValueError("port must be 1..65535")
     if "BEGIN" not in (private_key or "") or "PRIVATE KEY" not in private_key:
         raise ValueError("private_key must be a PEM-encoded private key")
     if not private_key.endswith("\n"):
         private_key += "\n"
 
-    public = {"host": host, "user": user, "port": port, "fingerprint": None}
-    save_credentials(db, SANDBOX,
-                     secret_data={"private_key": private_key},
-                     public=public)
-    # Wipe any old known-hosts entries for this host so TOFU re-runs.
-    _forget_host(host, port)
-    return public
+    row = db.get(SshHost, label)
+    if row is None:
+        row = SshHost(label=label, host=host, username=user, port=int(port),
+                      description=description,
+                      private_key_encrypted=encrypt(private_key),
+                      created_by=created_by)
+        db.add(row)
+    else:
+        # If host/port changed, the old known_hosts fingerprint is no longer
+        # meaningful — clear it so TOFU re-runs.
+        if row.host != host or row.port != int(port):
+            _forget_host_entry(row.host, row.port)
+            row.fingerprint = None
+        row.host = host
+        row.username = user
+        row.port = int(port)
+        row.description = description
+        row.private_key_encrypted = encrypt(private_key)
+        row.enabled = True
+    db.commit()
+    return _to_public(row)
 
 
-def forget(db: Session) -> None:
-    info = get_public(db, SANDBOX)
-    if info.get("host"):
-        _forget_host(info["host"], info.get("port") or 22)
-    from app.integrations import forget as _f
-    _f(db, SANDBOX)
-
-
-def public_info(db: Session) -> dict:
-    return get_public(db, SANDBOX)
+def forget_host(db: Session, label: str) -> bool:
+    label = label.strip().lower()
+    row = db.get(SshHost, label)
+    if not row:
+        return False
+    _forget_host_entry(row.host, row.port)
+    db.delete(row)
+    db.commit()
+    return True
 
 
 # ---- core SSH run ----
 
 def run(
-    db: Session, command: str, *, cwd: str | None = None,
+    db: Session,
+    label: str,
+    command: str,
+    *,
+    cwd: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict:
-    """Run an arbitrary shell command on the sandbox host. Returns
-    {exit_code, stdout, stderr, host}. No argv whitelist — the whole
-    point of the sandbox is that the agent has a free shell there."""
-    creds = get_credentials(db, SANDBOX)
-    public = get_public(db, SANDBOX)
-    if not creds or not public.get("host"):
+    """Run an arbitrary shell command on the labeled host."""
+    label_norm = (label or "").strip().lower()
+    row = db.get(SshHost, label_norm)
+    if not row:
         return {"exit_code": 1, "stdout": "",
-                "stderr": "sandbox_host is not configured",
-                "host": None}
-
-    host = public["host"]
-    user = public["user"]
-    port = int(public.get("port") or 22)
-    fingerprint = public.get("fingerprint")
+                "stderr": (f"unknown ssh host label '{label}'. "
+                           f"Configured: " + ", ".join(
+                               r.label for r in db.scalars(select(SshHost))
+                           ) or "(none)"),
+                "host": None, "label": label_norm}
+    if not row.enabled:
+        return {"exit_code": 1, "stdout": "",
+                "stderr": f"host '{label_norm}' is disabled",
+                "host": f"{row.username}@{row.host}:{row.port}",
+                "label": label_norm}
 
     os.makedirs(SSH_STATE_DIR, exist_ok=True)
     os.chmod(SSH_STATE_DIR, 0o700)
 
-    # Write the private key to a temp file (mode 0600), removed after.
     keyf = tempfile.NamedTemporaryFile(mode="w", delete=False, dir=SSH_STATE_DIR)
     try:
-        keyf.write(creds["private_key"])
+        keyf.write(decrypt(row.private_key_encrypted))
         keyf.flush()
         os.chmod(keyf.name, 0o600)
         keyf.close()
 
-        first_time = not fingerprint or not _has_host(host, port)
+        first_time = not row.fingerprint or not _has_host(row.host, row.port)
         argv = [
             "ssh",
             "-i", keyf.name,
-            "-p", str(port),
+            "-p", str(row.port),
             "-o", "BatchMode=yes",
             "-o", "PasswordAuthentication=no",
             "-o", "PubkeyAuthentication=yes",
@@ -119,13 +183,9 @@ def run(
                 else "StrictHostKeyChecking=yes"
             ),
             "-o", f"ConnectTimeout={min(15, timeout)}",
-            f"{user}@{host}",
+            f"{row.username}@{row.host}",
         ]
-        # Wrap command for cwd; never compose with shell on our side.
-        if cwd:
-            payload = f"cd {shlex.quote(cwd)} && {command}"
-        else:
-            payload = command
+        payload = (f"cd {shlex.quote(cwd)} && {command}") if cwd else command
         argv.append(payload)
 
         try:
@@ -137,21 +197,22 @@ def run(
                 "exit_code": p.returncode,
                 "stdout": p.stdout[-8000:],
                 "stderr": p.stderr[-4000:],
-                "host": f"{user}@{host}:{port}",
+                "host": f"{row.username}@{row.host}:{row.port}",
+                "label": row.label,
             }
         except subprocess.TimeoutExpired:
             result = {"exit_code": 124, "stdout": "",
                       "stderr": f"timeout after {timeout}s",
-                      "host": f"{user}@{host}:{port}"}
+                      "host": f"{row.username}@{row.host}:{row.port}",
+                      "label": row.label}
 
         # First-time success: record the fingerprint so future calls
         # use strict verification.
         if first_time and result["exit_code"] in (0, 1, 2):
-            fp = _read_fingerprint(host, port)
+            fp = _read_fingerprint(row.host, row.port)
             if fp:
-                public["fingerprint"] = fp
-                save_credentials(db, SANDBOX,
-                                 secret_data=creds, public=public)
+                row.fingerprint = fp
+                db.commit()
         return result
     finally:
         try:
@@ -160,9 +221,9 @@ def run(
             pass
 
 
-def test_connection(db: Session) -> dict:
+def test_connection(db: Session, label: str) -> dict:
     """Quick probe used by the admin UI."""
-    return run(db, "id; hostname; uname -srm; uptime -p")
+    return run(db, label, "id; hostname; uname -srm; uptime -p")
 
 
 # ---- internals: known_hosts management ----
@@ -181,7 +242,7 @@ def _has_host(host: str, port: int) -> bool:
         return False
 
 
-def _forget_host(host: str, port: int) -> None:
+def _forget_host_entry(host: str, port: int) -> None:
     if not os.path.exists(KNOWN_HOSTS):
         return
     bracket = f"[{host}]:{port}" if port != 22 else host

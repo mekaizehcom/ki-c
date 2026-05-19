@@ -16,13 +16,16 @@
   let pairCode = "";
   let pairBot = "tessa";
   let pairBusy = false;
-  let sandbox: any = null;
+  let sshHosts: any[] = [];
+  let sbLabel = "";
   let sbHost = "";
   let sbUser = "ubuntu";
   let sbPort = 22;
+  let sbDescription = "";
   let sbKey = "";
   let sbBusy = false;
-  let sbTestResult = "";
+  let sbTestResult: Record<string, string> = {};
+  let sbBusyByLabel: Record<string, boolean> = {};
 
   onMount(async () => {
     try {
@@ -40,49 +43,63 @@
   });
 
   async function refresh() {
-    [sys, providers, agents, users, audit, swisschat, sandbox] = await Promise.all([
+    [sys, providers, agents, users, audit, swisschat, sshHosts] = await Promise.all([
       api.adminSystem(), api.adminProviders(), api.adminAgents(),
       api.adminUsers(), api.adminAudit(),
       api.swisschatStatus().catch(() => ({ configured: false })),
-      api.sandboxStatus().catch(() => ({ configured: false })),
+      api.sandboxHosts().catch(() => []),
     ]);
   }
 
-  async function saveSandbox() {
-    msg = ""; sbTestResult = ""; sbBusy = true;
+  function fmtResult(r: any): string {
+    return `exit ${r.exit_code} @ ${r.host || "?"}\n` +
+           ((r.stdout || "").trim() + (r.stderr ? "\n" + r.stderr.trim() : ""));
+  }
+
+  async function saveSshHost() {
+    msg = ""; sbBusy = true;
+    const label = sbLabel.trim().toLowerCase();
     try {
-      await api.sandboxConfigure({
-        host: sbHost.trim(), user: sbUser.trim() || "ubuntu",
-        port: Number(sbPort) || 22, private_key: sbKey,
+      await api.sandboxUpsert(label, {
+        host: sbHost.trim(),
+        user: sbUser.trim() || "ubuntu",
+        port: Number(sbPort) || 22,
+        private_key: sbKey,
+        description: sbDescription.trim(),
       });
-      sbKey = "";
-      msg = "Sandbox host saved. Running connection test…";
-      const r = await api.sandboxTest();
-      sbTestResult = `exit ${r.exit_code} @ ${r.host || "?"}\n` +
-                     ((r.stdout || "").trim() + "\n" + (r.stderr || "").trim());
-      msg = r.exit_code === 0 ? "Sandbox connection OK." : "Sandbox saved, test failed (see below).";
+      sbKey = ""; sbLabel = ""; sbHost = ""; sbDescription = "";
+      msg = `Host '${label}' saved. Running test…`;
+      const r = await api.sandboxTest(label);
+      sbTestResult = { ...sbTestResult, [label]: fmtResult(r) };
+      msg = r.exit_code === 0
+        ? `Host '${label}' connected OK.`
+        : `Host '${label}' saved but the test failed (see output).`;
       await refresh();
     } catch (e: any) {
-      msg = `Sandbox save failed: ${e.message}`;
+      msg = `Save failed: ${e.message}`;
     } finally { sbBusy = false; }
   }
 
-  async function testSandbox() {
-    sbTestResult = ""; sbBusy = true;
+  async function testHost(label: string) {
+    sbBusyByLabel = { ...sbBusyByLabel, [label]: true };
     try {
-      const r = await api.sandboxTest();
-      sbTestResult = `exit ${r.exit_code} @ ${r.host || "?"}\n` +
-                     ((r.stdout || "").trim() + "\n" + (r.stderr || "").trim());
-    } catch (e: any) { sbTestResult = e.message; }
-    finally { sbBusy = false; }
+      const r = await api.sandboxTest(label);
+      sbTestResult = { ...sbTestResult, [label]: fmtResult(r) };
+    } catch (e: any) {
+      sbTestResult = { ...sbTestResult, [label]: e.message };
+    } finally {
+      sbBusyByLabel = { ...sbBusyByLabel, [label]: false };
+    }
+    await refresh();
   }
 
-  async function forgetSandbox() {
-    if (!confirm("Forget sandbox credentials? Tessa loses the ability to run ssh_exec.")) return;
-    msg = ""; sbTestResult = "";
+  async function forgetHost(label: string) {
+    if (!confirm(`Forget SSH host '${label}'? Tessa loses access to it.`)) return;
+    msg = "";
     try {
-      await api.sandboxForget();
-      msg = "Sandbox credentials forgotten.";
+      await api.sandboxForget(label);
+      msg = `Host '${label}' forgotten.`;
+      const next = { ...sbTestResult }; delete next[label]; sbTestResult = next;
       await refresh();
     } catch (e: any) { msg = e.message; }
   }
@@ -204,40 +221,70 @@
     </div>
 
     <div class="card" style="margin-bottom:1rem;">
-      <h3 style="margin-top:0;">Sandbox host (SSH target)</h3>
+      <h3 style="margin-top:0;">SSH execution targets</h3>
       <p class="muted" style="font-size:0.85rem;margin-top:0;">
-        Tessa's <b>devops</b> agent runs free-form shell here (deploy,
-        nginx, certbot, apt). This is intentionally separate from the
-        Tessa host. (Superadmin only.)
+        Hosts Tessa's <b>devops</b> agent can reach via <code>ssh_exec</code>.
+        Pick targets by <b>label</b> from chat or tools. Intentionally
+        separate from the Tessa host. (Superadmin only to add/remove.)
       </p>
-      {#if sandbox?.configured}
-        <div class="muted" style="font-size:0.85rem;margin-bottom:0.6rem;">
-          {sandbox.user}@<b>{sandbox.host}</b>:{sandbox.port}
-          {#if sandbox.fingerprint}· fp: <code>{sandbox.fingerprint}</code>{/if}
-        </div>
-        <div style="display:flex;gap:0.5rem;">
-          <button on:click={testSandbox} disabled={sbBusy}>Test connection</button>
-          <button on:click={forgetSandbox} style="background:#b91c1c;">Forget</button>
-        </div>
-      {:else}
-        <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;">
-          <input bind:value={sbHost} placeholder="host or IP" style="flex:2;" />
-          <input bind:value={sbUser} placeholder="user" style="flex:1;" />
-          <input bind:value={sbPort} placeholder="22" style="width:80px;" inputmode="numeric" />
-        </div>
-        <textarea bind:value={sbKey} placeholder="Paste the private key (PEM, starts with -----BEGIN ... PRIVATE KEY-----)"
-                  rows="6"
-                  style="width:100%;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem;font-family:ui-monospace,monospace;font-size:0.78rem;"></textarea>
-        <div style="margin-top:0.5rem;">
-          <button on:click={saveSandbox}
-                  disabled={sbBusy || !sbHost.trim() || !sbKey.trim()}>
-            {sbBusy ? "Saving…" : "Save & test"}
-          </button>
-        </div>
+
+      {#if sshHosts.length === 0}
+        <p class="muted" style="font-size:0.82rem;">No hosts registered yet.</p>
       {/if}
-      {#if sbTestResult}
-        <pre style="white-space:pre-wrap;background:#0d1117;padding:0.6rem;border-radius:6px;margin-top:0.8rem;font-size:0.78rem;max-height:200px;overflow:auto;">{sbTestResult}</pre>
-      {/if}
+      {#each sshHosts as h}
+        <div style="border:1px solid var(--border);border-radius:8px;padding:0.6rem;margin-bottom:0.6rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.4rem;">
+            <div>
+              <b>{h.label}</b>
+              <span class="muted" style="font-size:0.85rem;margin-left:0.5rem;">
+                {h.user}@{h.host}:{h.port}
+              </span>
+              {#if h.description}
+                <div class="muted" style="font-size:0.78rem;">{h.description}</div>
+              {/if}
+              {#if h.fingerprint}
+                <div class="muted" style="font-size:0.72rem;">fp: <code>{h.fingerprint}</code></div>
+              {:else}
+                <div class="muted" style="font-size:0.72rem;">fingerprint not yet recorded (TOFU on first connect)</div>
+              {/if}
+            </div>
+            <div style="display:flex;gap:0.4rem;">
+              <button on:click={() => testHost(h.label)}
+                      disabled={!!sbBusyByLabel[h.label]}>
+                {sbBusyByLabel[h.label] ? "…" : "Test"}
+              </button>
+              <button on:click={() => forgetHost(h.label)}
+                      style="background:#b91c1c;">Forget</button>
+            </div>
+          </div>
+          {#if sbTestResult[h.label]}
+            <pre style="white-space:pre-wrap;background:#0d1117;padding:0.5rem;border-radius:6px;margin-top:0.5rem;font-size:0.76rem;max-height:160px;overflow:auto;">{sbTestResult[h.label]}</pre>
+          {/if}
+        </div>
+      {/each}
+
+      <h4 style="margin-bottom:0.4rem;">Add or update a host</h4>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.4rem;">
+        <input bind:value={sbLabel} placeholder="label (e.g. staging)" style="flex:1;min-width:140px;" />
+        <input bind:value={sbHost} placeholder="host or IP" style="flex:2;min-width:180px;" />
+        <input bind:value={sbUser} placeholder="user" style="width:120px;" />
+        <input bind:value={sbPort} placeholder="22" style="width:80px;" inputmode="numeric" />
+      </div>
+      <input bind:value={sbDescription} placeholder="optional description"
+             style="width:100%;margin-bottom:0.4rem;" />
+      <textarea bind:value={sbKey}
+                placeholder="Paste the private key (PEM, starts with -----BEGIN ... PRIVATE KEY-----)"
+                rows="5"
+                style="width:100%;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem;font-family:ui-monospace,monospace;font-size:0.78rem;"></textarea>
+      <div style="margin-top:0.5rem;">
+        <button on:click={saveSshHost}
+                disabled={sbBusy || !sbLabel.trim() || !sbHost.trim() || !sbKey.trim()}>
+          {sbBusy ? "Saving…" : "Save & test"}
+        </button>
+        <span class="muted" style="font-size:0.78rem;margin-left:0.5rem;">
+          Saving an existing label updates it (private key replaced).
+        </span>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom:1rem;">

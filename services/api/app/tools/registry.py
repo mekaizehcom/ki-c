@@ -117,15 +117,20 @@ REGISTRY: dict[str, Command] = {
     # ---- remote shell on the sandbox host (free-form, contained blast radius) ----
     "ssh_exec": Command(
         "ssh_exec", [], "remote_shell", "medium", False,
-        "Run an arbitrary shell command on the configured sandbox host "
-        "(NOT this Tessa host). Use for deployments, nginx, certbot, "
-        "package installs, file edits, etc. payload: "
-        "{command, cwd?, timeout?}. Every call is audited.",
+        "Run an arbitrary shell command on a REGISTERED sandbox host. "
+        "Pick the target with `label` (e.g. 'staging', 'prod-eu1'); "
+        "the agent's system prompt lists the labels currently available. "
+        "Use for deployments, nginx, certbot, package installs, file "
+        "edits — anything you would do on a real server. Every call is "
+        "audited. NEVER targets the Tessa host itself.",
         internal="ssh_exec",
         payload_schema={
             "type": "object",
-            "required": ["command"],
+            "required": ["label", "command"],
             "properties": {
+                "label": {"type": "string",
+                          "description": "The registered host's label "
+                                         "(see system prompt for the list)."},
                 "command": {"type": "string",
                             "description": "Shell command to run remotely. "
                                            "Passed to the remote shell as-is; "

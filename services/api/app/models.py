@@ -241,6 +241,27 @@ class SwisschatAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class SshHost(Base, TimestampMixin):
+    """A registered SSH execution target.
+
+    Admin-managed list of "sandbox" hosts Tessa can reach via ssh_exec.
+    `label` is the slug agents use to pick a target. The private key is
+    Fernet-encrypted; the host key fingerprint is recorded on first
+    successful connect (TOFU) and verified strictly afterwards.
+    """
+
+    __tablename__ = "ssh_hosts"
+    label: Mapped[str] = mapped_column(String(60), primary_key=True)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str] = mapped_column(String(64), nullable=False, default="ubuntu")
+    port: Mapped[int] = mapped_column(Integer, nullable=False, default=22)
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    private_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+
+
 class IntegrationCredential(Base, TimestampMixin):
     """Encrypted credential blob for an external integration (e.g. swisschat).
 

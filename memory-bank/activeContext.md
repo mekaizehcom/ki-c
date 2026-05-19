@@ -21,30 +21,36 @@ Die noch laufende Aufgabe für den Endnutzer ist die **User-Verlinkung**:
 
 ## Letzte Entscheidungen (jüngste zuerst)
 
-1. **Sandbox-Host für freie Shell-Aktionen.** Neue zweite Instanz vom
-   User provisioniert, separater SSH-Key. Tessa-Host bleibt locked-down,
-   alle produktiven Aktionen (Deploy, Nginx, Certbot, apt) laufen über
-   SSH gegen den Sandbox-Host.
-   - Neues `remote_shell` Tool `ssh_exec` (in-process internal action)
-     — free-form Shell, kein argv-Whitelist. payload:
-     `{command, cwd?, timeout?}`. Audit erfasst command, host, exit_code,
-     stdout/stderr-tail.
-   - Credentials in `integration_credentials["sandbox_host"]`:
-     public `{host, user, port, fingerprint}`, encrypted `{private_key}`.
-   - Host-key-Verifikation: TOFU on first connect → Fingerprint wird in
-     der public-blob gespeichert; subsequente Calls verifizieren strikt
-     gegen `/var/lib/tessa/ssh/known_hosts` (persistiertes Volume
-     `ssh_state`).
-   - `openssh-client` ist im API-Image. Private Key wird pro Call in
-     ein 0600-Tempfile geschrieben und nach dem Call gelöscht.
-   - Admin-UI: Sektion "Sandbox host (SSH target)" — host/user/port
-     + Key paste (PEM), Save & test, Test connection, Forget.
-   - `devops` agent hat `remote_shell` + `workspace` Tools,
-     `Autonomie: scoped_auto`, Whitelist
-     `[ssh_exec, workspace_read, workspace_write]`. Andere Agents
-     bekommen `remote_shell` nicht.
-   - Parser-Gotcha: Labels in AGENTS.md dürfen keine Klammern enthalten
-     (Regex `^[A-Za-zÄÖÜäöü ]+:`).
+1. **Multi-Host SSH-Sandbox** (Migration 0004). Statt einer einzelnen
+   Sandbox jetzt eine **gelabelte Liste** von Execution-Targets.
+   - Eigene Tabelle `ssh_hosts(label PK, host, username, port,
+     description, enabled, private_key_encrypted, fingerprint,
+     created_by, timestamps)`. Private Key per Eintrag Fernet-
+     verschlüsselt.
+   - `ssh_exec` payload jetzt `{label (required), command, cwd?,
+     timeout?}`. Schema-`enum` für Label haben wir bewusst NICHT —
+     stattdessen werden die verfügbaren Labels in den system prompt
+     injiziert (Section "Available SSH hosts"), wenn der Agent
+     `remote_shell` in seinen tools hat.
+   - Label-Regel: `[a-z0-9][a-z0-9_-]{0,40}`, case-insensitiv
+     normalisiert (input wird gelowercased), reserved: localhost,
+     local, tessa, self.
+   - Admin-UI: pro Host inline Test/Forget, "Add or update a host"
+     Formular (label, host, user, port, description, PEM key). Save
+     auf existierendes Label = Update (Key wird ersetzt).
+   - Admin-Endpoints kollektiv:
+     `GET /api/admin/sandbox/hosts`,
+     `PUT /api/admin/sandbox/hosts/{label}`,
+     `POST /api/admin/sandbox/hosts/{label}/test`,
+     `DELETE /api/admin/sandbox/hosts/{label}`.
+   - TOFU + strict-verify pro Host weiterhin via
+     `/var/lib/tessa/ssh/known_hosts` (eine Datei, mehrere Einträge
+     keyed by host+port). Bei Update mit geändertem host/port wird der
+     alte known_hosts-Eintrag gepurgt → TOFU re-runs.
+   - `devops` agent unverändert mit `remote_shell` + `scoped_auto` +
+     `[ssh_exec, workspace_read, workspace_write]` whitelist.
+   - Unbekanntes Label im Aufruf liefert klaren Fehler mit Liste der
+     konfigurierten Labels (kein silent failure).
 2. **Deterministische Slash-Commands im Chat** (Migration 0003).
    `_try_command()` läuft VOR jedem Modell-Aufruf in REST und WS:
    - `/help` — Liste aller Commands.
